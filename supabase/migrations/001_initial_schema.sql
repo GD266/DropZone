@@ -1,6 +1,6 @@
--- DropZone Database Schema
--- Migration: 001_initial_schema
--- Description: Create shares and files tables with proper relationships
+-- DropZone Database Schema Migration
+-- Version: 1.0.0
+-- Description: Initial schema for cloud-based file sharing
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

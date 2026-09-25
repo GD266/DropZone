@@ -1,63 +1,31 @@
-# DropZone Supabase Backend Setup Guide
+# DropZone - Complete Setup Guide
 
-## Overview
+## 🚀 Quick Start (5 minutes)
 
-DropZone now uses Supabase as its persistent backend for file storage and metadata management. This guide walks you through the complete setup process.
-
-## Architecture
-
-```
-User uploads files
-    ↓
-Frontend (React + Vite)
-    ↓
-Supabase Client (anon key)
-    ↓
-┌───────────────────┬──────────────────┐
-│  Supabase Storage │   PostgreSQL DB  │
-│  (file binaries)  │   (metadata)     │
-└───────────────────┴──────────────────┘
-    ↓
-Share URLs work from any device/browser
-```
-
-## Prerequisites
-
-1. A Supabase account (free tier works)
-2. Node.js 18+ installed
-3. npm or yarn package manager
-
-## Step 1: Create Supabase Project
+### 1. Create Supabase Project
 
 1. Go to [supabase.com](https://supabase.com)
-2. Sign in or create an account
+2. Sign up / Sign in
 3. Click "New Project"
 4. Fill in:
-   - **Name**: `dropzone` (or your preferred name)
-   - **Database Password**: (save this somewhere safe)
-   - **Region**: Choose closest to your users
-   - **Pricing Plan**: Free (sufficient for testing)
-5. Click "Create new project"
-6. Wait for project to initialize (~2 minutes)
+   - **Name**: `dropzone` (or your choice)
+   - **Database Password**: (save this!)
+   - **Region**: Choose closest to you
+   - **Pricing Plan**: Free tier is sufficient
+5. Wait for project to initialize (~2 minutes)
 
-## Step 2: Get Your Credentials
+### 2. Get Your Credentials
 
-1. In your Supabase dashboard, go to **Settings** → **API**
+1. In Supabase Dashboard, go to **Settings** → **API**
 2. Copy these values:
-   - **Project URL** (e.g., `https://xxxxx.supabase.co`)
+   - **Project URL** (e.g., `https://abc123.supabase.co`)
    - **anon public key** (starts with `eyJ...`)
 
-⚠️ **Security Note**: Only use the `anon` key in your frontend. Never expose the `service_role` key.
+⚠️ **Important**: Only use the `anon` key. Never use `service_role` key in frontend code.
 
-## Step 3: Configure Environment Variables
+### 3. Configure Environment Variables
 
-1. In your project root, create a `.env` file:
-
-```bash
-cp .env.example .env
-```
-
-2. Edit `.env` and fill in your values:
+Create a `.env` file in the project root:
 
 ```env
 VITE_SUPABASE_URL=https://your-project-id.supabase.co
@@ -65,81 +33,117 @@ VITE_SUPABASE_ANON_KEY=your-anon-key-here
 VITE_SUPABASE_STORAGE_BUCKET=dropzone-files
 ```
 
-⚠️ **Important**: The `.env` file is already in `.gitignore` and will not be committed.
+Replace the values with your actual Supabase credentials.
 
-## Step 4: Create Database Tables
+### 4. Create Database Tables
 
-### Option A: Using SQL Editor (Recommended)
+Go to **SQL Editor** in Supabase Dashboard and run:
 
-1. In Supabase dashboard, go to **SQL Editor**
-2. Click "New Query"
-3. Copy and paste the contents of `supabase/migrations/001_initial_schema.sql`
-4. Click "Run" or press `Ctrl+Enter`
-5. You should see "Success. No rows returned"
-
-### Option B: Using Supabase CLI (Alternative)
-
-If you have the Supabase CLI installed:
-
-```bash
-# Link your project
-supabase link --project-ref your-project-id
-
-# Apply migrations
-supabase db push
+```sql
+-- Copy and paste the entire contents of:
+-- supabase/migrations/001_initial_schema.sql
 ```
 
-## Step 5: Create Storage Bucket
+Or manually create the tables:
 
-1. In Supabase dashboard, go to **Storage**
+```sql
+-- Create shares table
+CREATE TABLE shares (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  share_id TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+-- Create files table
+CREATE TABLE files (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  share_id TEXT NOT NULL REFERENCES shares(share_id) ON DELETE CASCADE,
+  storage_path TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  mime_type TEXT,
+  size BIGINT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW() NOT NULL
+);
+
+-- Create indexes
+CREATE INDEX idx_shares_share_id ON shares(share_id);
+CREATE INDEX idx_files_share_id ON files(share_id);
+
+-- Enable RLS
+ALTER TABLE shares ENABLE ROW LEVEL SECURITY;
+ALTER TABLE files ENABLE ROW LEVEL SECURITY;
+
+-- Allow public access
+CREATE POLICY "public_read_shares" ON shares FOR SELECT USING (true);
+CREATE POLICY "public_insert_shares" ON shares FOR INSERT WITH CHECK (true);
+CREATE POLICY "public_delete_shares" ON shares FOR DELETE USING (true);
+
+CREATE POLICY "public_read_files" ON files FOR SELECT USING (true);
+CREATE POLICY "public_insert_files" ON files FOR INSERT WITH CHECK (true);
+CREATE POLICY "public_delete_files" ON files FOR DELETE USING (true);
+```
+
+### 5. Create Storage Bucket
+
+1. Go to **Storage** in Supabase Dashboard
 2. Click "New bucket"
 3. Fill in:
    - **Name**: `dropzone-files`
-   - **Public bucket**: ✅ **Enable** (files need to be publicly accessible)
+   - **Public bucket**: ✅ Enable (required for file access)
    - **File size limit**: `100 MB`
    - **Allowed MIME types**: Leave empty (allow all)
 4. Click "Create bucket"
 
-## Step 6: Configure Storage Policies
+### 6. Configure Storage Policies
 
-1. Still in **Storage**, click on your `dropzone-files` bucket
-2. Go to the **Policies** tab
-3. Click "New Policy" → "For full customization"
-4. Create these 4 policies:
+In the Storage section, click on your `dropzone-files` bucket, then go to **Policies** tab and create these policies:
 
-### Policy 1: Public Read Access
-- **Policy name**: `Public read access`
-- **Allowed operation**: `SELECT`
-- **Target roles**: Leave as `public`
-- **USING expression**: `bucket_id = 'dropzone-files'`
+**Policy 1: Public Read Access**
+```sql
+CREATE POLICY "Public read access"
+ON storage.objects
+FOR SELECT
+USING (bucket_id = 'dropzone-files');
+```
 
-### Policy 2: Allow Public Uploads
-- **Policy name**: `Allow public uploads`
-- **Allowed operation**: `INSERT`
-- **Target roles**: Leave as `public`
-- **WITH CHECK expression**: `bucket_id = 'dropzone-files'`
+**Policy 2: Allow Public Uploads**
+```sql
+CREATE POLICY "Allow public uploads"
+ON storage.objects
+FOR INSERT
+WITH CHECK (bucket_id = 'dropzone-files');
+```
 
-### Policy 3: Allow Public Updates
-- **Policy name**: `Allow public updates`
-- **Allowed operation**: `UPDATE`
-- **Target roles**: Leave as `public`
-- **USING expression**: `bucket_id = 'dropzone-files'`
+**Policy 3: Allow Public Updates**
+```sql
+CREATE POLICY "Allow public updates"
+ON storage.objects
+FOR UPDATE
+USING (bucket_id = 'dropzone-files');
+```
 
-### Policy 4: Allow Public Deletes
-- **Policy name**: `Allow public deletes`
-- **Allowed operation**: `DELETE`
-- **Target roles**: Leave as `public`
-- **USING expression**: `bucket_id = 'dropzone-files'`
+**Policy 4: Allow Public Deletes**
+```sql
+CREATE POLICY "Allow public deletes"
+ON storage.objects
+FOR DELETE
+USING (bucket_id = 'dropzone-files');
+```
 
-**OR** use the SQL from `supabase/migrations/002_storage_setup.sql` in the SQL Editor.
+Or run all at once:
 
-## Step 7: Install Dependencies
+```sql
+-- Copy and paste the entire contents of:
+-- supabase/migrations/002_storage_setup.sql
+```
+
+### 7. Install Dependencies
 
 ```bash
 npm install
 ```
 
-## Step 8: Run the Application
+### 8. Start Development Server
 
 ```bash
 npm run dev
@@ -147,7 +151,9 @@ npm run dev
 
 The app should open at `http://localhost:5173`
 
-## Testing the Setup
+---
+
+## ✅ Testing the Setup
 
 ### Test 1: Upload a Single File
 
@@ -198,65 +204,58 @@ In Supabase dashboard → **Table Editor**:
    - Navigate to `shares/{shareId}/{fileId}/`
    - ✅ Your files should be there
 
-## Troubleshooting
+---
 
-### "Missing Supabase environment variables"
+## 🔧 Troubleshooting
 
-- Check that `.env` file exists in project root
+### "DropZone configuration error"
+
+**Problem**: Environment variables not set
+
+**Solution**:
+- Check `.env` file exists
 - Verify `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are set
 - Restart the dev server after changing `.env`
 
 ### "Failed to create share"
 
-- Check that database tables were created (Step 4)
-- Verify RLS policies are enabled
-- Check browser console for detailed errors
+**Problem**: Database tables not created or RLS policies missing
+
+**Solution**:
+- Run the SQL migration in Supabase SQL Editor
+- Verify tables exist in Table Editor
+- Check RLS policies are enabled
 
 ### "Failed to upload file to storage"
 
-- Verify storage bucket `dropzone-files` exists (Step 5)
-- Check storage policies allow INSERT (Step 6)
+**Problem**: Storage bucket doesn't exist or policies missing
+
+**Solution**:
+- Verify storage bucket `dropzone-files` exists
+- Check storage policies allow INSERT
 - Ensure bucket is set to **Public**
 
-### "Share not found" when opening link
+### "Share not found"
 
-- Verify the share exists in the `shares` table
-- Check that the `share_id` in the URL matches the database
+**Problem**: Share doesn't exist in database
+
+**Solution**:
+- Check share exists in `shares` table
+- Verify the `share_id` in the URL matches the database
 - Ensure RLS policies allow SELECT on `shares` table
 
 ### Files don't persist after refresh
 
-- This should not happen with Supabase backend
+**Problem**: This should not happen with Supabase backend
+
+**Solution**:
 - Check browser console for errors
 - Verify you're not using the old IndexedDB implementation
+- Check Supabase Dashboard for errors
 
-## Security Considerations
+---
 
-### What's Safe to Expose
-
-✅ **anon key** - Designed for client-side use, limited permissions via RLS
-
-### What's NOT Safe
-
-❌ **service_role key** - Bypasses all security, never expose this
-
-### Current Security Model
-
-- **RLS enabled** on all tables
-- **Public read/write** (no authentication required)
-- **Storage policies** restrict to `dropzone-files` bucket only
-- **No service_role key** in frontend code
-
-### Future Enhancements
-
-For production use, consider:
-- Adding authentication (Supabase Auth)
-- Rate limiting uploads
-- File size limits per user
-- Expiring share links
-- Private shares with passwords
-
-## Database Schema
+## 📊 Database Schema
 
 ### shares table
 ```sql
@@ -285,7 +284,87 @@ dropzone-files/
             └── {originalFilename}
 ```
 
-## Environment Variables Reference
+---
+
+## 🔒 Security
+
+### What's Safe to Expose
+
+✅ **anon key** - Designed for client-side use, limited permissions via RLS
+
+### What's NOT Safe
+
+❌ **service_role key** - Bypasses all security, never expose this
+
+### Current Security Model
+
+- **RLS enabled** on all tables
+- **Public read/write** (no authentication required for MVP)
+- **Storage policies** restrict to `dropzone-files` bucket only
+- **No service_role key** in frontend code
+
+### Future Enhancements
+
+For production use, consider:
+- Adding authentication (Supabase Auth)
+- Rate limiting uploads
+- File size limits per user
+- Expiring share links
+- Private shares with passwords
+
+---
+
+## 🌐 Deployment
+
+### Vercel
+
+1. Go to Vercel Dashboard → Your Project → Settings → Environment Variables
+2. Add for Production, Preview, Development:
+   ```
+   VITE_SUPABASE_URL = https://your-project-id.supabase.co
+   VITE_SUPABASE_ANON_KEY = your-anon-key
+   VITE_SUPABASE_STORAGE_BUCKET = dropzone-files
+   ```
+3. **Redeploy** (required - env vars are injected at build time)
+
+### Netlify
+
+1. Go to Netlify Dashboard → Your Site → Site settings → Environment variables
+2. Add the same variables
+3. **Trigger new deploy**
+
+### Other Platforms
+
+Most platforms follow the same pattern:
+1. Find environment variables section
+2. Add the `VITE_*` variables
+3. Rebuild/redeploy
+
+**Critical**: Environment variables are injected at build time. You MUST redeploy after adding them.
+
+---
+
+## 💰 Cost Estimation (Supabase Free Tier)
+
+**Free Tier Includes:**
+- 500 MB database
+- 1 GB file storage
+- 2 GB bandwidth/month
+- 50,000 monthly active users
+
+**For DropZone:**
+- Database: ~1 KB per file metadata → 500,000 files
+- Storage: Depends on user uploads → 1 GB limit
+- Bandwidth: Depends on downloads → 2 GB limit
+
+**When to Upgrade:**
+- If you exceed 1 GB storage
+- If you exceed 2 GB bandwidth
+- If you need more database space
+
+---
+
+## 📝 Environment Variables Reference
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -293,62 +372,56 @@ dropzone-files/
 | `VITE_SUPABASE_ANON_KEY` | Public anon key | `eyJhbGc...` |
 | `VITE_SUPABASE_STORAGE_BUCKET` | Storage bucket name | `dropzone-files` |
 
-## File Structure
+---
+
+## 🎯 Architecture
 
 ```
-supabase/
-├── migrations/
-│   ├── 001_initial_schema.sql    # Database tables
-│   └── 002_storage_setup.sql     # Storage policies
-
-src/
-├── lib/
-│   ├── supabase.ts              # Supabase client
-│   ├── storage.ts               # Storage operations
-│   └── zipUtils.ts              # ZIP download logic
-├── hooks/
-│   └── useUpload.ts             # Upload hook
-└── pages/
-    └── SharePage.tsx            # Share page (updated)
-
-.env.example                     # Environment template
-.env                             # Your credentials (gitignored)
+User uploads file
+    ↓
+Frontend (React + Vite)
+    ↓
+Supabase Client (anon key)
+    ↓
+┌───────────────────┬──────────────────┐
+│  Supabase Storage │   PostgreSQL DB  │
+│  (file binaries)  │   (metadata)     │
+└───────────────────┴──────────────────┘
+    ↓
+Share URLs work from any device/browser
 ```
-
-## Cleanup
-
-To delete a share and all its files:
-
-```typescript
-import { deleteShare } from './lib/storage';
-await deleteShare(shareId);
-```
-
-This will:
-1. Delete all files from Storage
-2. Delete all file records from database
-3. Delete the share record
-
-## Support
-
-- Supabase Docs: https://supabase.com/docs
-- Storage Docs: https://supabase.com/docs/guides/storage
-- RLS Docs: https://supabase.com/docs/guides/auth/row-level-security
-
-## Next Steps
-
-After confirming everything works:
-
-1. ✅ Test cross-device sharing
-2. ✅ Verify file persistence
-3. ✅ Test ZIP downloads
-4. ⚠️ Consider adding authentication for production
-5. ⚠️ Set up monitoring/alerts
-6. ⚠️ Configure custom domain (optional)
-7. ⚠️ Set up backups (Supabase does this automatically)
 
 ---
 
-**Status**: ✅ Backend integration complete
-**Last Updated**: 2024
-**Version**: 1.0.0
+## 📚 Support
+
+- **Supabase Docs**: https://supabase.com/docs
+- **Storage Guide**: https://supabase.com/docs/guides/storage
+- **RLS Guide**: https://supabase.com/docs/guides/auth/row-level-security
+
+---
+
+## ✅ Checklist
+
+Before going live, verify:
+
+- [ ] Supabase project created
+- [ ] `.env` file configured with credentials
+- [ ] Database tables created (shares, files)
+- [ ] RLS policies enabled and configured
+- [ ] Storage bucket `dropzone-files` created
+- [ ] Storage bucket set to Public
+- [ ] Storage policies configured
+- [ ] Dev server restarted
+- [ ] Upload test successful
+- [ ] Share link works in incognito
+- [ ] Cross-device sharing works
+- [ ] Download All (ZIP) works
+- [ ] Environment variables set in deployment platform
+- [ ] Production deployment successful
+
+---
+
+**Status**: Ready for setup  
+**Time to configure**: ~10 minutes  
+**Difficulty**: Easy (copy-paste SQL, fill in env vars)
