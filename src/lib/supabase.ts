@@ -27,11 +27,9 @@ export function getConfigurationError(): string | null {
 // Lazy initialization - only create client when actually needed
 let supabaseClient: SupabaseClient | null = null;
 
-export function getSupabaseClient(): SupabaseClient {
+export function getSupabaseClient(): SupabaseClient | null {
   if (!isSupabaseConfigured()) {
-    throw new Error(
-      'Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY environment variables.'
-    );
+    return null;
   }
   
   if (!supabaseClient) {
@@ -40,20 +38,3 @@ export function getSupabaseClient(): SupabaseClient {
   
   return supabaseClient;
 }
-
-// For backward compatibility - export a proxy that throws helpful error
-export const supabase = new Proxy({} as SupabaseClient, {
-  get(_, prop) {
-    if (!isSupabaseConfigured()) {
-      throw new Error(
-        'Supabase is not configured. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY environment variables.'
-      );
-    }
-    
-    if (!supabaseClient) {
-      supabaseClient = createClient(supabaseUrl!, supabaseAnonKey!);
-    }
-    
-    return (supabaseClient as any)[prop];
-  }
-});
