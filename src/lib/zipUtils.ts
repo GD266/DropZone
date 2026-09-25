@@ -1,12 +1,6 @@
 import JSZip from 'jszip';
-import type { StoredFile } from '../types';
-import { getFilesByShareId, getShareCollection } from './storage';
-
-export interface ZipProgress {
-  stage: 'preparing' | 'creating' | 'downloading' | 'complete' | 'error';
-  message: string;
-  percent?: number;
-}
+import type { ZipProgress } from '../types';
+import { getShare, getFileBlob } from './storage';
 
 export async function createZipDownload(
   shareId: string,
@@ -15,13 +9,12 @@ export async function createZipDownload(
   try {
     onProgress?.({ stage: 'preparing', message: 'Preparing ZIP...' });
 
-    const share = await getShareCollection(shareId);
+    const share = await getShare(shareId);
     if (!share) {
-      throw new Error('Share collection not found');
+      throw new Error('Share not found');
     }
 
-    const files = await getFilesByShareId(shareId);
-    if (files.length === 0) {
+    if (share.files.length === 0) {
       throw new Error('No files found in collection');
     }
 
@@ -34,16 +27,28 @@ export async function createZipDownload(
       throw new Error('Failed to create ZIP folder');
     }
 
-    // Add each file to the ZIP
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      folder.file(file.name, file.data);
+    // Download and add each file to the ZIP
+    for (let i = 0; i < share.files.length; i++) {
+      const file = share.files[i];
       
-      // Update progress
-      const percent = Math.round(((i + 1) / files.length) * 100);
       onProgress?.({ 
         stage: 'creating', 
-        message: `Adding files... ${i + 1}/${files.length}`,
+        message: `Downloading files... ${i + 1}/${share.files.length}`,
+        percent: Math.round(((i + 1) / share.files.length) * 50)
+      });
+
+      try {
+        const blob = await getFileBlob(file.storagePath);
+        folder.file(file.name, blob);
+      } catch (err) {
+        console.error(`Failed to download file ${file.name}:`, err);
+        // Continue with other files
+      }
+      
+      const percent = Math.round(((i + 1) / share.files.length) * 50);
+      onProgress?.({ 
+        stage: 'creating', 
+        message: `Adding files... ${i + 1}/${share.files.length}`,
         percent 
       });
     }
@@ -62,7 +67,7 @@ export async function createZipDownload(
           onProgress?.({ 
             stage: 'downloading', 
             message: `Compressing... ${Math.round(metadata.percent)}%`,
-            percent: Math.round(metadata.percent)
+            percent: 50 + Math.round(metadata.percent * 0.5)
           });
         }
       }
