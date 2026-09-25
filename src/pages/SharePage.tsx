@@ -1,14 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Download, ArrowLeft, AlertCircle, Loader2, Eye, Shield, Copy, Check, Package, FileDown } from 'lucide-react';
-import { getFile, getShareWithFiles, createDownloadUrl, createPreviewUrl } from '../lib/storage';
+import { getShare, getFileByShareAndId, getDownloadUrl } from '../lib/storage';
 import { formatFileSize, formatDate, getFileCategory } from '../lib/fileUtils';
 import { getShareUrl, getFileUrl } from '../lib/shareLink';
-import { createZipDownload, type ZipProgress } from '../lib/zipUtils';
+import { createZipDownload } from '../lib/zipUtils';
 import { FileIcon } from '../components/FileIcon';
 import { Button } from '../components/Button';
 import { useClipboard } from '../hooks/useClipboard';
-import type { StoredFile, ShareCollection } from '../types';
+import type { ShareCollection, FileRecord, ZipProgress } from '../types';
 
 type PageState = 'loading' | 'collection' | 'file' | 'error';
 
@@ -16,8 +16,7 @@ export function SharePage() {
   const { shareId, fileId } = useParams<{ shareId: string; fileId?: string }>();
   const [state, setState] = useState<PageState>('loading');
   const [share, setShare] = useState<ShareCollection | null>(null);
-  const [files, setFiles] = useState<StoredFile[]>([]);
-  const [currentFile, setCurrentFile] = useState<StoredFile | null>(null);
+  const [currentFile, setCurrentFile] = useState<FileRecord | null>(null);
   const [zipProgress, setZipProgress] = useState<ZipProgress | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const { copyToClipboard, isCopied } = useClipboard();
@@ -30,10 +29,17 @@ export function SharePage() {
       }
 
       try {
-        // If we have a fileId, load just that file
+        const shareData = await getShare(shareId);
+        
+        if (!shareData) {
+          setState('error');
+          return;
+        }
+
+        // If we have a fileId, find that specific file
         if (fileId) {
-          const file = await getFile(fileId);
-          if (!file || file.shareId !== shareId) {
+          const file = shareData.files.find(f => f.id === fileId);
+          if (!file) {
             setState('error');
             return;
           }
@@ -42,17 +48,11 @@ export function SharePage() {
           return;
         }
 
-        // Otherwise load the collection
-        const result = await getShareWithFiles(shareId);
-        if (!result) {
-          setState('error');
-          return;
-        }
-
-        setShare(result.share);
-        setFiles(result.files);
+        // Otherwise show the collection
+        setShare(shareData);
         setState('collection');
-      } catch {
+      } catch (err) {
+        console.error('Failed to load share:', err);
         setState('error');
       }
     }
@@ -108,9 +108,9 @@ export function SharePage() {
           <div className="flex items-center justify-center w-14 h-14 rounded-full bg-error/10 mx-auto mb-5">
             <AlertCircle size={28} className="text-error" />
           </div>
-          <h1 className="text-xl font-semibold text-text-primary mb-2">Not found</h1>
+          <h1 className="text-xl font-semibold text-text-primary mb-2">Share not found</h1>
           <p className="text-sm text-text-muted mb-8 leading-relaxed">
-            This file or collection may have been removed, or the link is invalid.
+            This share link may be invalid or the files may have been removed.
           </p>
           <Link to="/">
             <Button variant="secondary" size="md">
@@ -135,8 +135,8 @@ export function SharePage() {
   }
 
   // Collection view
-  if (state === 'collection' && share && files.length > 0) {
-    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+  if (state === 'collection' && share && share.files.length > 0) {
+    const totalSize = share.files.reduce((sum, f) => sum + f.size, 0);
 
     return (
       <div className="min-h-screen pt-14">
@@ -162,7 +162,7 @@ export function SharePage() {
                     Your files are ready
                   </h1>
                   <p className="text-sm text-text-muted">
-                    {files.length} {files.length === 1 ? 'file' : 'files'} · {formatFileSize(totalSize)}
+                    {share.files.length} {share.files.length === 1 ? 'file' : 'files'} · {formatFileSize(totalSize)}
                   </p>
                 </div>
               </div>
@@ -248,7 +248,7 @@ export function SharePage() {
 
             {/* File list */}
             <div className="divide-y divide-border">
-              {files.map((file) => (
+              {share.files.map((file) => (
                 <FileListItem
                   key={file.id}
                   file={file}
@@ -275,31 +275,10 @@ export function SharePage() {
 }
 
 // Single file view component
-function SingleFileView({ file, onCopyLink, isCopied }: { file: StoredFile; onCopyLink: () => void; isCopied: boolean }) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const category = getFileCategory(file.type, file.name);
-    
-    let pUrl: string | null = null;
-    let dUrl: string | null = null;
-
-    if (['image', 'video', 'audio', 'pdf'].includes(category)) {
-      pUrl = createPreviewUrl(file);
-      setPreviewUrl(pUrl);
-    }
-
-    dUrl = createDownloadUrl(file);
-    setDownloadUrl(dUrl);
-
-    return () => {
-      if (pUrl) URL.revokeObjectURL(pUrl);
-      if (dUrl) URL.revokeObjectURL(dUrl);
-    };
-  }, [file]);
-
+function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
+  const downloadUrl = getDownloadUrl(file.storagePath);
   const category = getFileCategory(file.type, file.name);
+  const isPreviewable = ['image', 'video', 'audio', 'pdf'].includes(category);
 
   return (
     <div className="min-h-screen pt-14">
@@ -316,9 +295,9 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: StoredFile; onCo
         {/* File card */}
         <div className="border border-border rounded-lg bg-surface-1 overflow-hidden shadow-sm">
           {/* Preview area */}
-          {previewUrl && (
+          {isPreviewable && (
             <div className="border-b border-border bg-surface-2 p-5">
-              <FilePreview category={category} previewUrl={previewUrl} filename={file.name} />
+              <FilePreview category={category} previewUrl={downloadUrl} filename={file.name} />
             </div>
           )}
 
@@ -362,14 +341,12 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: StoredFile; onCo
                 )}
               </Button>
 
-              {downloadUrl && (
-                <a href={downloadUrl} download={file.name} className="block">
-                  <Button variant="primary" size="lg" className="w-full">
-                    <Download size={18} />
-                    Download file
-                  </Button>
-                </a>
-              )}
+              <a href={downloadUrl} download={file.name} className="block">
+                <Button variant="primary" size="lg" className="w-full">
+                  <Download size={18} />
+                  Download file
+                </Button>
+              </a>
             </div>
           </div>
         </div>
@@ -387,14 +364,8 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: StoredFile; onCo
 }
 
 // File list item component
-function FileListItem({ file, onCopyLink, isCopied }: { file: StoredFile; onCopyLink: () => void; isCopied: boolean }) {
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    const url = createDownloadUrl(file);
-    setDownloadUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+function FileListItem({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
+  const downloadUrl = getDownloadUrl(file.storagePath);
 
   return (
     <div className="p-4 sm:p-5 hover:bg-surface-2/50 transition-colors">
@@ -430,14 +401,12 @@ function FileListItem({ file, onCopyLink, isCopied }: { file: StoredFile; onCopy
           )}
         </Button>
 
-        {downloadUrl && (
-          <a href={downloadUrl} download={file.name}>
-            <Button variant="secondary" size="sm">
-              <Download size={13} />
-              Download
-            </Button>
-          </a>
-        )}
+        <a href={downloadUrl} download={file.name}>
+          <Button variant="secondary" size="sm">
+            <Download size={13} />
+            Download
+          </Button>
+        </a>
       </div>
     </div>
   );

@@ -1,174 +1,261 @@
-import type { StoredFile, FileMetadata, ShareCollection } from '../types';
+import { supabase, STORAGE_BUCKET } from './supabase';
 import { v4 as uuidv4 } from 'uuid';
+import type { DbShare, DbFile, ShareCollection, FileRecord } from '../types';
 
-const DB_NAME = 'dropzone_db';
-const DB_VERSION = 2;
-const FILES_STORE = 'files';
-const SHARES_STORE = 'shares';
+// ============ HELPER FUNCTIONS ============
 
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      
-      if (!db.objectStoreNames.contains(FILES_STORE)) {
-        const store = db.createObjectStore(FILES_STORE, { keyPath: 'id' });
-        store.createIndex('shareId', 'shareId', { unique: false });
-        store.createIndex('uploadedAt', 'uploadedAt', { unique: false });
-      }
-      
-      if (!db.objectStoreNames.contains(SHARES_STORE)) {
-        db.createObjectStore(SHARES_STORE, { keyPath: 'id' });
-      }
-    };
-  });
+function sanitizeFilename(filename: string): string {
+  // Remove path traversal attempts and special characters
+  return filename
+    .replace(/[/\\]/g, '_')
+    .replace(/\.\./g, '_')
+    .replace(/[^\w\s.-]/g, '_')
+    .trim();
 }
 
-async function getTransaction(stores: string[], mode: IDBTransactionMode): Promise<IDBTransaction> {
-  const db = await openDB();
-  return db.transaction(stores, mode);
+function getStoragePath(shareId: string, fileId: string, filename: string): string {
+  const safeName = sanitizeFilename(filename);
+  return `shares/${shareId}/${fileId}/${safeName}`;
+}
+
+// ============ SHARE OPERATIONS ============
+
+export async function createShare(): Promise<string> {
+  const shareId = uuidv4();
+  
+  const { data, error } = await supabase
+    .from('shares')
+    .insert({ share_id: shareId })
+    .select()
+    .single();
+  
+  if (error) {
+    console.error('Failed to create share:', error);
+    throw new Error('Failed to create share');
+  }
+  
+  return data.share_id;
+}
+
+export async function getShare(shareId: string): Promise<ShareCollection | null> {
+  const { data: shareData, error: shareError } = await supabase
+    .from('shares')
+    .select('*')
+    .eq('share_id', shareId)
+    .single();
+  
+  if (shareError || !shareData) {
+    return null;
+  }
+  
+  // Get files for this share
+  const { data: filesData, error: filesError } = await supabase
+    .from('files')
+    .select('*')
+    .eq('share_id', shareId)
+    .order('created_at', { ascending: true });
+  
+  if (filesError) {
+    console.error('Failed to fetch files:', filesError);
+    throw new Error('Failed to fetch files');
+  }
+  
+  const files: FileRecord[] = (filesData || []).map((f: DbFile) => ({
+    id: f.id,
+    shareId: f.share_id,
+    storagePath: f.storage_path,
+    name: f.original_name,
+    size: f.size,
+    type: f.mime_type || 'application/octet-stream',
+    uploadedAt: f.created_at,
+  }));
+  
+  return {
+    id: shareData.id,
+    shareId: shareData.share_id,
+    createdAt: shareData.created_at,
+    files,
+  };
+}
+
+export async function deleteShare(shareId: string): Promise<void> {
+  // Delete files from storage first
+  const { data: filesData } = await supabase
+    .from('files')
+    .select('storage_path')
+    .eq('share_id', shareId);
+  
+  if (filesData && filesData.length > 0) {
+    const paths = filesData.map(f => f.storage_path);
+    await supabase.storage.from(STORAGE_BUCKET).remove(paths);
+  }
+  
+  // Delete share (cascade will delete file records)
+  await supabase
+    .from('shares')
+    .delete()
+    .eq('share_id', shareId);
 }
 
 // ============ FILE OPERATIONS ============
 
-export async function storeFile(file: File, shareId: string, onProgress?: (progress: number) => void): Promise<StoredFile> {
-  const id = uuidv4();
-  const data = await readFileAsArrayBuffer(file, onProgress);
-
-  const storedFile: StoredFile = {
-    id,
-    shareId,
-    name: file.name,
-    size: file.size,
-    type: file.type,
-    data,
-    uploadedAt: new Date().toISOString(),
-  };
-
-  const tx = await getTransaction([FILES_STORE], 'readwrite');
-  const store = tx.objectStore(FILES_STORE);
+export async function uploadFile(
+  file: File,
+  shareId: string,
+  onProgress?: (progress: number) => void
+): Promise<FileRecord> {
+  const fileId = uuidv4();
+  const storagePath = getStoragePath(shareId, fileId, file.name);
   
-  return new Promise((resolve, reject) => {
-    const request = store.put(storedFile);
-    request.onerror = () => reject(new Error('Failed to store file'));
-    request.onsuccess = () => resolve(storedFile);
-  });
-}
-
-export async function getFile(id: string): Promise<StoredFile | null> {
-  const tx = await getTransaction([FILES_STORE], 'readonly');
-  const store = tx.objectStore(FILES_STORE);
+  // Upload to Supabase Storage
+  const { error: uploadError } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .upload(storagePath, file, {
+      cacheControl: '3600',
+      upsert: false,
+      contentType: file.type || 'application/octet-stream',
+    });
   
-  return new Promise((resolve, reject) => {
-    const request = store.get(id);
-    request.onerror = () => reject(new Error('Failed to retrieve file'));
-    request.onsuccess = () => resolve(request.result || null);
-  });
-}
-
-export async function getFileMetadata(id: string): Promise<FileMetadata | null> {
-  const file = await getFile(id);
-  if (!file) return null;
+  if (uploadError) {
+    console.error('Storage upload failed:', uploadError);
+    throw new Error('Failed to upload file to storage');
+  }
+  
+  // Create file record in database
+  const { data: fileData, error: dbError } = await supabase
+    .from('files')
+    .insert({
+      share_id: shareId,
+      storage_path: storagePath,
+      original_name: file.name,
+      mime_type: file.type || null,
+      size: file.size,
+    })
+    .select()
+    .single();
+  
+  if (dbError) {
+    console.error('Database insert failed:', dbError);
+    // Cleanup: remove the uploaded file
+    await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    throw new Error('Failed to save file metadata');
+  }
+  
   return {
-    id: file.id,
-    shareId: file.shareId,
-    name: file.name,
-    size: file.size,
-    type: file.type,
-    uploadedAt: file.uploadedAt,
+    id: fileData.id,
+    shareId: fileData.share_id,
+    storagePath: fileData.storage_path,
+    name: fileData.original_name,
+    size: fileData.size,
+    type: fileData.mime_type || 'application/octet-stream',
+    uploadedAt: fileData.created_at,
   };
 }
 
-export async function getFilesByShareId(shareId: string): Promise<StoredFile[]> {
-  const tx = await getTransaction([FILES_STORE], 'readonly');
-  const store = tx.objectStore(FILES_STORE);
-  const index = store.index('shareId');
+export async function getFile(fileId: string): Promise<FileRecord | null> {
+  const { data, error } = await supabase
+    .from('files')
+    .select('*')
+    .eq('id', fileId)
+    .single();
   
-  return new Promise((resolve, reject) => {
-    const request = index.getAll(shareId);
-    request.onerror = () => reject(new Error('Failed to retrieve files'));
-    request.onsuccess = () => resolve(request.result || []);
-  });
-}
-
-export async function deleteFile(id: string): Promise<void> {
-  const tx = await getTransaction([FILES_STORE], 'readwrite');
-  const store = tx.objectStore(FILES_STORE);
+  if (error || !data) {
+    return null;
+  }
   
-  return new Promise((resolve, reject) => {
-    const request = store.delete(id);
-    request.onerror = () => reject(new Error('Failed to delete file'));
-    request.onsuccess = () => resolve();
-  });
-}
-
-// ============ SHARE COLLECTION OPERATIONS ============
-
-export async function createShareCollection(fileIds: string[]): Promise<ShareCollection> {
-  const share: ShareCollection = {
-    id: uuidv4(),
-    createdAt: new Date().toISOString(),
-    fileIds,
+  return {
+    id: data.id,
+    shareId: data.share_id,
+    storagePath: data.storage_path,
+    name: data.original_name,
+    size: data.size,
+    type: data.mime_type || 'application/octet-stream',
+    uploadedAt: data.created_at,
   };
+}
 
-  const tx = await getTransaction([SHARES_STORE], 'readwrite');
-  const store = tx.objectStore(SHARES_STORE);
+export async function getFileByShareAndId(
+  shareId: string,
+  fileId: string
+): Promise<FileRecord | null> {
+  const { data, error } = await supabase
+    .from('files')
+    .select('*')
+    .eq('id', fileId)
+    .eq('share_id', shareId)
+    .single();
   
-  return new Promise((resolve, reject) => {
-    const request = store.put(share);
-    request.onerror = () => reject(new Error('Failed to create share'));
-    request.onsuccess = () => resolve(share);
-  });
-}
-
-export async function getShareCollection(id: string): Promise<ShareCollection | null> {
-  const tx = await getTransaction([SHARES_STORE], 'readonly');
-  const store = tx.objectStore(SHARES_STORE);
+  if (error || !data) {
+    return null;
+  }
   
-  return new Promise((resolve, reject) => {
-    const request = store.get(id);
-    request.onerror = () => reject(new Error('Failed to retrieve share'));
-    request.onsuccess = () => resolve(request.result || null);
-  });
+  return {
+    id: data.id,
+    shareId: data.share_id,
+    storagePath: data.storage_path,
+    name: data.original_name,
+    size: data.size,
+    type: data.mime_type || 'application/octet-stream',
+    uploadedAt: data.created_at,
+  };
 }
 
-export async function getShareWithFiles(id: string): Promise<{ share: ShareCollection; files: StoredFile[] } | null> {
-  const share = await getShareCollection(id);
-  if (!share) return null;
+export async function deleteFile(fileId: string): Promise<void> {
+  const { data: fileData } = await supabase
+    .from('files')
+    .select('storage_path')
+    .eq('id', fileId)
+    .single();
   
-  const files = await getFilesByShareId(id);
-  return { share, files };
+  if (fileData) {
+    // Delete from storage
+    await supabase.storage.from(STORAGE_BUCKET).remove([fileData.storage_path]);
+    
+    // Delete from database
+    await supabase
+      .from('files')
+      .delete()
+      .eq('id', fileId);
+  }
 }
 
-// ============ UTILITY FUNCTIONS ============
+// ============ DOWNLOAD URL GENERATION ============
 
-function readFileAsArrayBuffer(file: File, onProgress?: (progress: number) => void): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onprogress = (event) => {
-      if (event.lengthComputable && onProgress) {
-        const progress = Math.round((event.loaded / event.total) * 100);
-        onProgress(progress);
-      }
-    };
-
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.readAsArrayBuffer(file);
-  });
+export function getDownloadUrl(storagePath: string): string {
+  const { data } = supabase.storage
+    .from(STORAGE_BUCKET)
+    .getPublicUrl(storagePath);
+  
+  return data.publicUrl;
 }
 
-export function createDownloadUrl(file: StoredFile): string {
-  const blob = new Blob([file.data], { type: file.type || 'application/octet-stream' });
-  return URL.createObjectURL(blob);
+export async function getSignedDownloadUrl(
+  storagePath: string,
+  expiresIn: number = 3600
+): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .createSignedUrl(storagePath, expiresIn);
+  
+  if (error) {
+    console.error('Failed to create signed URL:', error);
+    throw new Error('Failed to generate download URL');
+  }
+  
+  return data.signedUrl;
 }
 
-export function createPreviewUrl(file: StoredFile): string {
-  return createDownloadUrl(file);
+// ============ ZIP DOWNLOAD HELPER ============
+
+export async function getFileBlob(storagePath: string): Promise<Blob> {
+  const { data, error } = await supabase.storage
+    .from(STORAGE_BUCKET)
+    .download(storagePath);
+  
+  if (error) {
+    console.error('Failed to download file:', error);
+    throw new Error('Failed to download file from storage');
+  }
+  
+  return data;
 }

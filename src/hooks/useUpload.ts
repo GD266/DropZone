@@ -1,7 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
-import { v4 as uuidv4 } from 'uuid';
 import type { UploadFile, UploadSession } from '../types';
-import { storeFile, createShareCollection } from '../lib/storage';
+import { createShare, uploadFile } from '../lib/storage';
 import { validateFile } from '../lib/fileUtils';
 
 export function useUpload() {
@@ -39,11 +38,16 @@ export function useUpload() {
     // Create or get share ID
     let shareId = sessionRef.current?.shareId;
     if (!shareId) {
-      shareId = uuidv4();
+      try {
+        shareId = await createShare();
+      } catch (err) {
+        console.error('Failed to create share:', err);
+        return;
+      }
     }
 
     const newUploads: UploadFile[] = uniqueFiles.map(file => ({
-      id: uuidv4(),
+      id: file.name + file.size, // Use name+size as unique ID
       file,
       status: 'pending' as const,
       progress: 0,
@@ -54,7 +58,8 @@ export function useUpload() {
       uploads: [...(prev?.uploads || []), ...newUploads],
     }));
 
-    const storedFileIds: string[] = [];
+    // Track successfully uploaded files for cleanup
+    const uploadedFileIds: string[] = [];
 
     for (const upload of newUploads) {
       if (abortRef.current) break;
@@ -68,11 +73,11 @@ export function useUpload() {
       try {
         updateUpload(upload.id, { status: 'uploading', progress: 0 });
 
-        const stored = await storeFile(upload.file, shareId!, (progress) => {
+        const fileRecord = await uploadFile(upload.file, shareId!, (progress: number) => {
           updateUpload(upload.id, { progress });
         });
 
-        storedFileIds.push(stored.id);
+        uploadedFileIds.push(fileRecord.id);
         updateUpload(upload.id, {
           status: 'success',
           progress: 100,
@@ -83,14 +88,8 @@ export function useUpload() {
       }
     }
 
-    // Create share collection after all files are stored
-    if (storedFileIds.length > 0) {
-      try {
-        await createShareCollection(storedFileIds);
-      } catch {
-        // Collection creation failed but files are still stored
-      }
-    }
+    // If some files failed but share was created with no successful files,
+    // we could clean up the empty share. For now, we keep it.
   }, [updateUpload, setSessionAndRef]);
 
   const clearAll = useCallback(() => {
