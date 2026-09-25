@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import type { ZipProgress } from '../types';
-import { getShare, getFileBlob } from './storage';
+import { getShare, getFileBlob, getLocalFileBlob, getStorageMode } from './storage';
 
 export async function createZipDownload(
   shareId: string,
@@ -27,22 +27,33 @@ export async function createZipDownload(
       throw new Error('Failed to create ZIP folder');
     }
 
-    // Download and add each file to the ZIP
+    const storageMode = getStorageMode();
+
     for (let i = 0; i < share.files.length; i++) {
       const file = share.files[i];
       
       onProgress?.({ 
         stage: 'creating', 
-        message: `Downloading files... ${i + 1}/${share.files.length}`,
+        message: `Processing files... ${i + 1}/${share.files.length}`,
         percent: Math.round(((i + 1) / share.files.length) * 50)
       });
 
       try {
-        const blob = await getFileBlob(file.storagePath);
+        let blob: Blob;
+        
+        if (storageMode === 'cloud' && file.storagePath) {
+          blob = await getFileBlob(file.storagePath);
+        } else {
+          const result = await getLocalFileBlob(file.id);
+          if (!result) {
+            throw new Error(`File ${file.name} not found in local storage`);
+          }
+          blob = result.blob;
+        }
+        
         folder.file(file.name, blob);
       } catch (err) {
-        console.error(`[DropZone] Failed to download file ${file.name}:`, err);
-        // Continue with other files
+        console.error(`[DropZone] Failed to process file ${file.name}:`, err);
       }
       
       const percent = Math.round(((i + 1) / share.files.length) * 50);
@@ -55,7 +66,6 @@ export async function createZipDownload(
 
     onProgress?.({ stage: 'downloading', message: 'Generating ZIP...' });
 
-    // Generate the ZIP blob
     const blob = await zip.generateAsync(
       { 
         type: 'blob',
@@ -75,7 +85,6 @@ export async function createZipDownload(
 
     onProgress?.({ stage: 'downloading', message: 'Downloading...' });
 
-    // Trigger download
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
