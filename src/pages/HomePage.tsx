@@ -93,7 +93,7 @@ export function HomePage() {
           <div className="flex items-center justify-center gap-4 text-xs text-text-muted">
             <span>No sign-up required</span>
             <span className="w-1 h-1 rounded-full bg-border" />
-            <span>Cloud storage</span>
+            <span>Local browser storage</span>
             <span className="w-1 h-1 rounded-full bg-border" />
             <span>Up to 100 MB per file</span>
           </div>

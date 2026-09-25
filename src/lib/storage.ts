@@ -2,10 +2,190 @@ import { getSupabaseClient, STORAGE_BUCKET, isSupabaseConfigured } from './supab
 import { v4 as uuidv4 } from 'uuid';
 import type { DbShare, DbFile, ShareCollection, FileRecord } from '../types';
 
-// ============ HELPER FUNCTIONS ============
+// ============ LOCAL STORAGE (IndexedDB) ============
+
+const DB_NAME = 'dropzone_local_db';
+const DB_VERSION = 1;
+const FILES_STORE = 'files';
+const SHARES_STORE = 'shares';
+
+interface LocalStoredFile {
+  id: string;
+  shareId: string;
+  name: string;
+  size: number;
+  type: string;
+  data: ArrayBuffer;
+  uploadedAt: string;
+}
+
+interface LocalShare {
+  id: string;
+  shareId: string;
+  createdAt: string;
+}
+
+function openLocalDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(FILES_STORE)) {
+        const store = db.createObjectStore(FILES_STORE, { keyPath: 'id' });
+        store.createIndex('shareId', 'shareId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(SHARES_STORE)) {
+        const store = db.createObjectStore(SHARES_STORE, { keyPath: 'id' });
+        store.createIndex('shareId', 'shareId', { unique: true });
+      }
+    };
+  });
+}
+
+async function localCreateShare(): Promise<string> {
+  const shareId = uuidv4();
+  const share: LocalShare = {
+    id: uuidv4(),
+    shareId,
+    createdAt: new Date().toISOString(),
+  };
+  const db = await openLocalDB();
+  const tx = db.transaction(SHARES_STORE, 'readwrite');
+  const store = tx.objectStore(SHARES_STORE);
+  return new Promise((resolve, reject) => {
+    const request = store.put(share);
+    request.onerror = () => reject(new Error('Failed to create local share'));
+    request.onsuccess = () => resolve(shareId);
+  });
+}
+
+async function localGetShare(shareId: string): Promise<ShareCollection | null> {
+  const db = await openLocalDB();
+  
+  // Get share
+  const shareTx = db.transaction(SHARES_STORE, 'readonly');
+  const shareStore = shareTx.objectStore(SHARES_STORE);
+  const shareData = await new Promise<LocalShare | null>((resolve, reject) => {
+    const request = shareStore.index('shareId').get(shareId);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result || null);
+  });
+  
+  if (!shareData) return null;
+  
+  // Get files
+  const fileTx = db.transaction(FILES_STORE, 'readonly');
+  const fileStore = fileTx.objectStore(FILES_STORE);
+  const fileIndex = fileStore.index('shareId');
+  const filesData = await new Promise<LocalStoredFile[]>((resolve, reject) => {
+    const request = fileIndex.getAll(shareId);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result || []);
+  });
+  
+  const files: FileRecord[] = filesData.map(f => ({
+    id: f.id,
+    shareId: f.shareId,
+    storagePath: '', // Not used in local mode
+    name: f.name,
+    size: f.size,
+    type: f.type,
+    uploadedAt: f.uploadedAt,
+  }));
+  
+  return {
+    id: shareData.id,
+    shareId: shareData.shareId,
+    createdAt: shareData.createdAt,
+    files,
+  };
+}
+
+async function localUploadFile(
+  file: File,
+  shareId: string,
+  onProgress?: (progress: number) => void
+): Promise<{ fileRecord: FileRecord; data: ArrayBuffer }> {
+  const id = uuidv4();
+  
+  // Read file data
+  const data = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = (event) => {
+      if (event.lengthComputable && onProgress) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.readAsArrayBuffer(file);
+  });
+  
+  const storedFile: LocalStoredFile = {
+    id,
+    shareId,
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    data,
+    uploadedAt: new Date().toISOString(),
+  };
+  
+  const db = await openLocalDB();
+  const tx = db.transaction(FILES_STORE, 'readwrite');
+  const store = tx.objectStore(FILES_STORE);
+  
+  await new Promise<void>((resolve, reject) => {
+    const request = store.put(storedFile);
+    request.onerror = () => reject(new Error('Failed to store file'));
+    request.onsuccess = () => resolve();
+  });
+  
+  const fileRecord: FileRecord = {
+    id,
+    shareId,
+    storagePath: '',
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    uploadedAt: storedFile.uploadedAt,
+  };
+  
+  return { fileRecord, data };
+}
+
+async function localGetFileData(fileId: string): Promise<{ file: FileRecord; data: ArrayBuffer } | null> {
+  const db = await openLocalDB();
+  const tx = db.transaction(FILES_STORE, 'readonly');
+  const store = tx.objectStore(FILES_STORE);
+  
+  const stored = await new Promise<LocalStoredFile | null>((resolve, reject) => {
+    const request = store.get(fileId);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result || null);
+  });
+  
+  if (!stored) return null;
+  
+  return {
+    file: {
+      id: stored.id,
+      shareId: stored.shareId,
+      storagePath: '',
+      name: stored.name,
+      size: stored.size,
+      type: stored.type,
+      uploadedAt: stored.uploadedAt,
+    },
+    data: stored.data,
+  };
+}
+
+// ============ CLOUD STORAGE (Supabase) ============
 
 function sanitizeFilename(filename: string): string {
-  // Remove path traversal attempts and special characters
   return filename
     .replace(/[/\\]/g, '_')
     .replace(/\.\./g, '_')
@@ -18,20 +198,7 @@ function getStoragePath(shareId: string, fileId: string, filename: string): stri
   return `shares/${shareId}/${fileId}/${safeName}`;
 }
 
-// ============ CONFIGURATION CHECK ============
-
-export function checkSupabaseConfig(): void {
-  if (!isSupabaseConfigured()) {
-    throw new Error(
-      'DropZone is not configured for cloud storage. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY environment variables.'
-    );
-  }
-}
-
-// ============ SHARE OPERATIONS ============
-
-export async function createShare(): Promise<string> {
-  checkSupabaseConfig();
+async function cloudCreateShare(): Promise<string> {
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not available');
   
@@ -50,8 +217,7 @@ export async function createShare(): Promise<string> {
   return data.share_id;
 }
 
-export async function getShare(shareId: string): Promise<ShareCollection | null> {
-  checkSupabaseConfig();
+async function cloudGetShare(shareId: string): Promise<ShareCollection | null> {
   const client = getSupabaseClient();
   if (!client) return null;
   
@@ -65,7 +231,6 @@ export async function getShare(shareId: string): Promise<ShareCollection | null>
     return null;
   }
   
-  // Get files for this share
   const { data: filesData, error: filesError } = await client
     .from('files')
     .select('*')
@@ -95,44 +260,17 @@ export async function getShare(shareId: string): Promise<ShareCollection | null>
   };
 }
 
-export async function deleteShare(shareId: string): Promise<void> {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) return;
-  
-  // Delete files from storage first
-  const { data: filesData } = await client
-    .from('files')
-    .select('storage_path')
-    .eq('share_id', shareId);
-  
-  if (filesData && filesData.length > 0) {
-    const paths = filesData.map((f: { storage_path: string }) => f.storage_path);
-    await client.storage.from(STORAGE_BUCKET).remove(paths);
-  }
-  
-  // Delete share (cascade will delete file records)
-  await client
-    .from('shares')
-    .delete()
-    .eq('share_id', shareId);
-}
-
-// ============ FILE OPERATIONS ============
-
-export async function uploadFile(
+async function cloudUploadFile(
   file: File,
   shareId: string,
   onProgress?: (progress: number) => void
 ): Promise<FileRecord> {
-  checkSupabaseConfig();
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not available');
   
   const fileId = uuidv4();
   const storagePath = getStoragePath(shareId, fileId, file.name);
   
-  // Upload to Supabase Storage
   const { error: uploadError } = await client.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, file, {
@@ -146,7 +284,6 @@ export async function uploadFile(
     throw new Error('Failed to upload file to storage');
   }
   
-  // Create file record in database
   const { data: fileData, error: dbError } = await client
     .from('files')
     .insert({
@@ -161,7 +298,6 @@ export async function uploadFile(
   
   if (dbError) {
     console.error('Database insert failed:', dbError);
-    // Cleanup: remove the uploaded file
     await client.storage.from(STORAGE_BUCKET).remove([storagePath]);
     throw new Error('Failed to save file metadata');
   }
@@ -177,123 +313,68 @@ export async function uploadFile(
   };
 }
 
-export async function getFile(fileId: string): Promise<FileRecord | null> {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) return null;
-  
-  const { data, error } = await client
-    .from('files')
-    .select('*')
-    .eq('id', fileId)
-    .single();
-  
-  if (error || !data) {
-    return null;
-  }
-  
-  return {
-    id: data.id,
-    shareId: data.share_id,
-    storagePath: data.storage_path,
-    name: data.original_name,
-    size: data.size,
-    type: data.mime_type || 'application/octet-stream',
-    uploadedAt: data.created_at,
-  };
+// ============ HYBRID API ============
+
+export function getStorageMode(): 'cloud' | 'local' {
+  return isSupabaseConfigured() ? 'cloud' : 'local';
 }
 
-export async function getFileByShareAndId(
+export async function createShare(): Promise<string> {
+  if (isSupabaseConfigured()) {
+    return cloudCreateShare();
+  }
+  return localCreateShare();
+}
+
+export async function getShare(shareId: string): Promise<ShareCollection | null> {
+  if (isSupabaseConfigured()) {
+    return cloudGetShare(shareId);
+  }
+  return localGetShare(shareId);
+}
+
+export async function uploadFile(
+  file: File,
   shareId: string,
-  fileId: string
-): Promise<FileRecord | null> {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) return null;
-  
-  const { data, error } = await client
-    .from('files')
-    .select('*')
-    .eq('id', fileId)
-    .eq('share_id', shareId)
-    .single();
-  
-  if (error || !data) {
-    return null;
+  onProgress?: (progress: number) => void
+): Promise<FileRecord> {
+  if (isSupabaseConfigured()) {
+    return cloudUploadFile(file, shareId, onProgress);
   }
-  
-  return {
-    id: data.id,
-    shareId: data.share_id,
-    storagePath: data.storage_path,
-    name: data.original_name,
-    size: data.size,
-    type: data.mime_type || 'application/octet-stream',
-    uploadedAt: data.created_at,
-  };
+  const { fileRecord } = await localUploadFile(file, shareId, onProgress);
+  return fileRecord;
 }
-
-export async function deleteFile(fileId: string): Promise<void> {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) return;
-  
-  const { data: fileData } = await client
-    .from('files')
-    .select('storage_path')
-    .eq('id', fileId)
-    .single();
-  
-  if (fileData) {
-    // Delete from storage
-    await client.storage.from(STORAGE_BUCKET).remove([fileData.storage_path]);
-    
-    // Delete from database
-    await client
-      .from('files')
-      .delete()
-      .eq('id', fileId);
-  }
-}
-
-// ============ DOWNLOAD URL GENERATION ============
 
 export function getDownloadUrl(storagePath: string): string {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) throw new Error('Supabase client not available');
-  
-  const { data } = client.storage
-    .from(STORAGE_BUCKET)
-    .getPublicUrl(storagePath);
-  
-  return data.publicUrl;
+  if (isSupabaseConfigured() && storagePath) {
+    const client = getSupabaseClient();
+    if (client) {
+      const { data } = client.storage
+        .from(STORAGE_BUCKET)
+        .getPublicUrl(storagePath);
+      return data.publicUrl;
+    }
+  }
+  return '';
 }
 
-export async function getSignedDownloadUrl(
-  storagePath: string,
-  expiresIn: number = 3600
-): Promise<string> {
-  checkSupabaseConfig();
-  const client = getSupabaseClient();
-  if (!client) throw new Error('Supabase client not available');
-  
-  const { data, error } = await client.storage
-    .from(STORAGE_BUCKET)
-    .createSignedUrl(storagePath, expiresIn);
-  
-  if (error) {
-    console.error('Failed to create signed URL:', error);
-    throw new Error('Failed to generate download URL');
+export async function getLocalFileBlob(fileId: string): Promise<{ blob: Blob; name: string; type: string } | null> {
+  if (isSupabaseConfigured()) {
+    return null; // Use getDownloadUrl for cloud files
   }
   
-  return data.signedUrl;
+  const result = await localGetFileData(fileId);
+  if (!result) return null;
+  
+  const blob = new Blob([result.data], { type: result.file.type || 'application/octet-stream' });
+  return { blob, name: result.file.name, type: result.file.type };
 }
 
-// ============ ZIP DOWNLOAD HELPER ============
-
 export async function getFileBlob(storagePath: string): Promise<Blob> {
-  checkSupabaseConfig();
+  if (!isSupabaseConfigured()) {
+    throw new Error('Cloud storage not configured');
+  }
+  
   const client = getSupabaseClient();
   if (!client) throw new Error('Supabase client not available');
   
