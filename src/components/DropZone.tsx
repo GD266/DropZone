@@ -55,8 +55,14 @@ export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
   }, [disabled]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    console.log('[DropZone] FILE INPUT CHANGE FIRED');
     const files = Array.from(e.target.files || []);
+    console.log('[DropZone] Selected files:', files);
+    console.log('[DropZone] File count:', files.length);
+    
     if (files.length > 0) {
+      console.log('[DropZone] First file:', files[0]);
+      console.log('[DropZone] Calling onFilesSelected with', files.length, 'files');
       onFilesSelected(files);
     }
     // Reset input so same file can be selected again
