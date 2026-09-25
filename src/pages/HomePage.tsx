@@ -1,0 +1,101 @@
+import { useCallback } from 'react';
+import { useUpload } from '../hooks/useUpload';
+import { DropZone } from '../components/DropZone';
+import { FileCard } from '../components/FileCard';
+import { ShareCard } from '../components/ShareCard';
+import { Button } from '../components/Button';
+import { Trash2, Sparkles } from 'lucide-react';
+
+export function HomePage() {
+  const { uploads, uploadFiles, clearAll } = useUpload();
+
+  const handleFilesSelected = useCallback((files: File[]) => {
+    uploadFiles(files);
+  }, [uploadFiles]);
+
+  const handleUploadAnother = useCallback(() => {
+    clearAll();
+  }, [clearAll]);
+
+  const completedUploads = uploads.filter(u => u.status === 'success');
+  const activeUploads = uploads.filter(u => u.status !== 'success');
+  const hasCompleted = completedUploads.length > 0;
+  const hasActive = activeUploads.length > 0;
+
+  return (
+    <div className="min-h-screen pt-14">
+      {/* Subtle background gradient */}
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-accent/[0.02] rounded-full blur-3xl" />
+      </div>
+
+      <div className="relative max-w-2xl mx-auto px-4 sm:px-6 py-12 md:py-20">
+        {/* Hero */}
+        <div className="text-center mb-10 md:mb-14">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-2 border border-border text-xs text-text-muted mb-5">
+            <Sparkles size={11} className="text-accent" />
+            Fast, simple file sharing
+          </div>
+          <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-text-primary mb-4 tracking-tight">
+            Share files.{' '}
+            <span className="bg-gradient-to-r from-accent to-accent-hover bg-clip-text text-transparent">
+              Simply.
+            </span>
+          </h1>
+          <p className="text-text-secondary text-base sm:text-lg max-w-md mx-auto leading-relaxed">
+            Upload a file and get a shareable link in seconds.
+          </p>
+        </div>
+
+        {/* Upload Zone */}
+        {!hasCompleted && (
+          <DropZone onFilesSelected={handleFilesSelected} />
+        )}
+
+        {/* Active uploads */}
+        {hasActive && (
+          <div className="mt-6 space-y-2">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-medium text-text-secondary">
+                {hasCompleted ? 'Uploading more files...' : 'Uploading'}
+              </h2>
+              <Button variant="ghost" size="sm" onClick={clearAll}>
+                <Trash2 size={13} />
+                Clear all
+              </Button>
+            </div>
+            {activeUploads.map(upload => (
+              <div key={upload.id} className="animate-fade-in">
+                <FileCard upload={upload} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Completed share cards */}
+        {hasCompleted && (
+          <div className="mt-8 space-y-4">
+            {completedUploads.map(upload => (
+              <ShareCard
+                key={upload.id}
+                upload={upload}
+                onUploadAnother={handleUploadAnother}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="mt-16 md:mt-24 text-center">
+          <div className="flex items-center justify-center gap-4 text-xs text-text-muted">
+            <span>No sign-up required</span>
+            <span className="w-1 h-1 rounded-full bg-border" />
+            <span>Stored locally</span>
+            <span className="w-1 h-1 rounded-full bg-border" />
+            <span>Up to 100 MB</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
