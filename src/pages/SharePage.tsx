@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Download, ArrowLeft, AlertCircle, Loader2, Eye, Shield, Copy, Check, Package, FileDown } from 'lucide-react';
-import { getShare, getFileByShareAndId, getDownloadUrl } from '../lib/storage';
+import { getShare, getDownloadUrl, getLocalFileBlob, getStorageMode } from '../lib/storage';
 import { formatFileSize, formatDate, getFileCategory } from '../lib/fileUtils';
 import { getShareUrl, getFileUrl } from '../lib/shareLink';
 import { createZipDownload } from '../lib/zipUtils';
@@ -36,7 +36,6 @@ export function SharePage() {
           return;
         }
 
-        // If we have a fileId, find that specific file
         if (fileId) {
           const file = shareData.files.find(f => f.id === fileId);
           if (!file) {
@@ -48,7 +47,6 @@ export function SharePage() {
           return;
         }
 
-        // Otherwise show the collection
         setShare(shareData);
         setState('collection');
       } catch (err) {
@@ -88,7 +86,6 @@ export function SharePage() {
     await copyToClipboard(getFileUrl(shareId, fileId), fileId);
   }, [shareId, copyToClipboard]);
 
-  // Loading state
   if (state === 'loading') {
     return (
       <div className="min-h-screen pt-14 flex items-center justify-center">
@@ -100,7 +97,6 @@ export function SharePage() {
     );
   }
 
-  // Error state
   if (state === 'error') {
     return (
       <div className="min-h-screen pt-14 flex items-center justify-center">
@@ -123,7 +119,6 @@ export function SharePage() {
     );
   }
 
-  // Single file view
   if (state === 'file' && currentFile) {
     return (
       <SingleFileView
@@ -134,14 +129,13 @@ export function SharePage() {
     );
   }
 
-  // Collection view
   if (state === 'collection' && share && share.files.length > 0) {
     const totalSize = share.files.reduce((sum, f) => sum + f.size, 0);
+    const storageMode = getStorageMode();
 
     return (
       <div className="min-h-screen pt-14">
         <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12 md:py-20">
-          {/* Back link */}
           <Link
             to="/"
             className="inline-flex items-center gap-1.5 text-sm text-text-muted hover:text-text-primary transition-colors mb-8 group"
@@ -150,7 +144,15 @@ export function SharePage() {
             Upload files
           </Link>
 
-          {/* Collection header */}
+          {/* Storage mode indicator */}
+          {storageMode === 'local' && (
+            <div className="mb-6 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20">
+              <p className="text-xs text-amber-400">
+                <strong>Note:</strong> Files are stored locally in your browser. Share links only work on this device/browser.
+              </p>
+            </div>
+          )}
+
           <div className="border border-border rounded-lg bg-surface-1 overflow-hidden mb-6">
             <div className="p-5 sm:p-6 border-b border-border">
               <div className="flex items-start gap-4 mb-5">
@@ -167,7 +169,6 @@ export function SharePage() {
                 </div>
               </div>
 
-              {/* Action buttons */}
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
                   variant="secondary"
@@ -209,7 +210,6 @@ export function SharePage() {
                 </Button>
               </div>
 
-              {/* ZIP progress */}
               {zipProgress && zipProgress.stage !== 'complete' && zipProgress.stage !== 'error' && (
                 <div className="mt-4 p-3 rounded-md bg-surface-2 border border-border">
                   <div className="flex items-center gap-2 text-sm text-text-secondary">
@@ -246,7 +246,6 @@ export function SharePage() {
               )}
             </div>
 
-            {/* File list */}
             <div className="divide-y divide-border">
               {share.files.map((file) => (
                 <FileListItem
@@ -259,7 +258,6 @@ export function SharePage() {
             </div>
           </div>
 
-          {/* Footer */}
           <div className="flex items-center justify-center gap-2 mt-8">
             <Shield size={12} className="text-text-muted" />
             <p className="text-xs text-text-muted">
@@ -276,14 +274,42 @@ export function SharePage() {
 
 // Single file view component
 function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
-  const downloadUrl = getDownloadUrl(file.storagePath);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const storageMode = getStorageMode();
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    async function setupUrls() {
+      if (storageMode === 'supabase' && file.storagePath) {
+        const url = getDownloadUrl(file.storagePath);
+        setPreviewUrl(url);
+        setDownloadUrl(url);
+      } else {
+        // Local mode - create blob URL
+        const result = await getLocalFileBlob(file.id);
+        if (result) {
+          objectUrl = URL.createObjectURL(result.blob);
+          setPreviewUrl(objectUrl);
+          setDownloadUrl(objectUrl);
+        }
+      }
+    }
+
+    setupUrls();
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file, storageMode]);
+
   const category = getFileCategory(file.type, file.name);
   const isPreviewable = ['image', 'video', 'audio', 'pdf'].includes(category);
 
   return (
     <div className="min-h-screen pt-14">
       <div className="max-w-lg mx-auto px-4 sm:px-6 py-12 md:py-20">
-        {/* Back link */}
         <Link
           to="/"
           className="inline-flex items-center gap-1.5 text-sm text-text-muted hover:text-text-primary transition-colors mb-8 group"
@@ -292,16 +318,21 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
           Upload files
         </Link>
 
-        {/* File card */}
+        {storageMode === 'local' && (
+          <div className="mb-6 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20">
+            <p className="text-xs text-amber-400">
+              <strong>Note:</strong> This file is stored locally in your browser.
+            </p>
+          </div>
+        )}
+
         <div className="border border-border rounded-lg bg-surface-1 overflow-hidden shadow-sm">
-          {/* Preview area */}
-          {isPreviewable && (
+          {isPreviewable && previewUrl && (
             <div className="border-b border-border bg-surface-2 p-5">
-              <FilePreview category={category} previewUrl={downloadUrl} filename={file.name} />
+              <FilePreview category={category} previewUrl={previewUrl} filename={file.name} />
             </div>
           )}
 
-          {/* File info */}
           <div className="p-5 sm:p-6">
             <div className="flex items-start gap-4 mb-6">
               <FileIcon type={file.type} filename={file.name} size={24} />
@@ -321,7 +352,6 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
               </div>
             </div>
 
-            {/* Action buttons */}
             <div className="flex flex-col gap-3">
               <Button
                 variant="secondary"
@@ -341,17 +371,18 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
                 )}
               </Button>
 
-              <a href={downloadUrl} download={file.name} className="block">
-                <Button variant="primary" size="lg" className="w-full">
-                  <Download size={18} />
-                  Download file
-                </Button>
-              </a>
+              {downloadUrl && (
+                <a href={downloadUrl} download={file.name} className="block">
+                  <Button variant="primary" size="lg" className="w-full">
+                    <Download size={18} />
+                    Download file
+                  </Button>
+                </a>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-center gap-2 mt-8">
           <Shield size={12} className="text-text-muted" />
           <p className="text-xs text-text-muted">
@@ -365,7 +396,30 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
 
 // File list item component
 function FileListItem({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
-  const downloadUrl = getDownloadUrl(file.storagePath);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const storageMode = getStorageMode();
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    async function setupUrl() {
+      if (storageMode === 'supabase' && file.storagePath) {
+        setDownloadUrl(getDownloadUrl(file.storagePath));
+      } else {
+        const result = await getLocalFileBlob(file.id);
+        if (result) {
+          objectUrl = URL.createObjectURL(result.blob);
+          setDownloadUrl(objectUrl);
+        }
+      }
+    }
+
+    setupUrl();
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file, storageMode]);
 
   return (
     <div className="p-4 sm:p-5 hover:bg-surface-2/50 transition-colors">
@@ -401,12 +455,14 @@ function FileListItem({ file, onCopyLink, isCopied }: { file: FileRecord; onCopy
           )}
         </Button>
 
-        <a href={downloadUrl} download={file.name}>
-          <Button variant="secondary" size="sm">
-            <Download size={13} />
-            Download
-          </Button>
-        </a>
+        {downloadUrl && (
+          <a href={downloadUrl} download={file.name}>
+            <Button variant="secondary" size="sm">
+              <Download size={13} />
+              Download
+            </Button>
+          </a>
+        )}
       </div>
     </div>
   );
@@ -418,21 +474,13 @@ function FilePreview({ category, previewUrl, filename }: { category: string; pre
     case 'image':
       return (
         <div className="flex items-center justify-center max-h-72 overflow-hidden rounded-lg bg-surface-3">
-          <img
-            src={previewUrl}
-            alt={filename}
-            className="max-w-full max-h-72 object-contain"
-          />
+          <img src={previewUrl} alt={filename} className="max-w-full max-h-72 object-contain" />
         </div>
       );
     case 'video':
       return (
         <div className="flex items-center justify-center rounded-lg overflow-hidden bg-surface-3">
-          <video
-            src={previewUrl}
-            controls
-            className="max-w-full max-h-72"
-          />
+          <video src={previewUrl} controls className="max-w-full max-h-72" />
         </div>
       );
     case 'audio':
@@ -448,12 +496,7 @@ function FilePreview({ category, previewUrl, filename }: { category: string; pre
             <Eye size={18} className="text-red-400" />
           </div>
           <p className="text-xs text-text-muted">PDF document</p>
-          <a
-            href={previewUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs text-accent hover:text-accent-hover transition-colors"
-          >
+          <a href={previewUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:text-accent-hover transition-colors">
             Open in new tab →
           </a>
         </div>
