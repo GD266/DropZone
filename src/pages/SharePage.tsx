@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Download, ArrowLeft, AlertCircle, Loader2, Eye, Shield, Copy, Check, Package, FileDown } from 'lucide-react';
-import { getShare, getDownloadUrl } from '../lib/storage';
+import { getShare, getDownloadUrl, getLocalFileBlob, getStorageMode } from '../lib/storage';
 import { formatFileSize, formatDate, getFileCategory } from '../lib/fileUtils';
 import { getShareUrl, getFileUrl } from '../lib/shareLink';
 import { createZipDownload } from '../lib/zipUtils';
@@ -131,6 +131,7 @@ export function SharePage() {
 
   if (state === 'collection' && share && share.files.length > 0) {
     const totalSize = share.files.reduce((sum, f) => sum + f.size, 0);
+    const storageMode = getStorageMode();
 
     return (
       <div className="min-h-screen pt-14">
@@ -142,6 +143,14 @@ export function SharePage() {
             <ArrowLeft size={14} className="transition-transform group-hover:-translate-x-0.5" />
             Upload files
           </Link>
+
+          {storageMode === 'local' && (
+            <div className="mb-6 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20">
+              <p className="text-xs text-amber-400">
+                <strong>Note:</strong> Files are stored locally in your browser. Share links only work on this device/browser.
+              </p>
+            </div>
+          )}
 
           <div className="border border-border rounded-lg bg-surface-1 overflow-hidden mb-6">
             <div className="p-5 sm:p-6 border-b border-border">
@@ -262,9 +271,36 @@ export function SharePage() {
   return null;
 }
 
-// Single file view component
 function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
-  const downloadUrl = getDownloadUrl(file.storagePath);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const storageMode = getStorageMode();
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    async function setupUrls() {
+      if (storageMode === 'cloud' && file.storagePath) {
+        const url = getDownloadUrl(file.storagePath);
+        setPreviewUrl(url);
+        setDownloadUrl(url);
+      } else {
+        const result = await getLocalFileBlob(file.id);
+        if (result) {
+          objectUrl = URL.createObjectURL(result.blob);
+          setPreviewUrl(objectUrl);
+          setDownloadUrl(objectUrl);
+        }
+      }
+    }
+
+    setupUrls();
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file, storageMode]);
+
   const category = getFileCategory(file.type, file.name);
   const isPreviewable = ['image', 'video', 'audio', 'pdf'].includes(category);
 
@@ -279,10 +315,18 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
           Upload files
         </Link>
 
+        {storageMode === 'local' && (
+          <div className="mb-6 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20">
+            <p className="text-xs text-amber-400">
+              <strong>Note:</strong> This file is stored locally in your browser.
+            </p>
+          </div>
+        )}
+
         <div className="border border-border rounded-lg bg-surface-1 overflow-hidden shadow-sm">
-          {isPreviewable && (
+          {isPreviewable && previewUrl && (
             <div className="border-b border-border bg-surface-2 p-5">
-              <FilePreview category={category} previewUrl={downloadUrl} filename={file.name} />
+              <FilePreview category={category} previewUrl={previewUrl} filename={file.name} />
             </div>
           )}
 
@@ -324,12 +368,14 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
                 )}
               </Button>
 
-              <a href={downloadUrl} download={file.name} className="block">
-                <Button variant="primary" size="lg" className="w-full">
-                  <Download size={18} />
-                  Download file
-                </Button>
-              </a>
+              {downloadUrl && (
+                <a href={downloadUrl} download={file.name} className="block">
+                  <Button variant="primary" size="lg" className="w-full">
+                    <Download size={18} />
+                    Download file
+                  </Button>
+                </a>
+              )}
             </div>
           </div>
         </div>
@@ -345,9 +391,31 @@ function SingleFileView({ file, onCopyLink, isCopied }: { file: FileRecord; onCo
   );
 }
 
-// File list item component
 function FileListItem({ file, onCopyLink, isCopied }: { file: FileRecord; onCopyLink: () => void; isCopied: boolean }) {
-  const downloadUrl = getDownloadUrl(file.storagePath);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const storageMode = getStorageMode();
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+
+    async function setupUrl() {
+      if (storageMode === 'cloud' && file.storagePath) {
+        setDownloadUrl(getDownloadUrl(file.storagePath));
+      } else {
+        const result = await getLocalFileBlob(file.id);
+        if (result) {
+          objectUrl = URL.createObjectURL(result.blob);
+          setDownloadUrl(objectUrl);
+        }
+      }
+    }
+
+    setupUrl();
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [file, storageMode]);
 
   return (
     <div className="p-4 sm:p-5 hover:bg-surface-2/50 transition-colors">
@@ -383,18 +451,19 @@ function FileListItem({ file, onCopyLink, isCopied }: { file: FileRecord; onCopy
           )}
         </Button>
 
-        <a href={downloadUrl} download={file.name}>
-          <Button variant="secondary" size="sm">
-            <Download size={13} />
-            Download
-          </Button>
-        </a>
+        {downloadUrl && (
+          <a href={downloadUrl} download={file.name}>
+            <Button variant="secondary" size="sm">
+              <Download size={13} />
+              Download
+            </Button>
+          </a>
+        )}
       </div>
     </div>
   );
 }
 
-// File preview component
 function FilePreview({ category, previewUrl, filename }: { category: string; previewUrl: string; filename: string }) {
   switch (category) {
     case 'image':

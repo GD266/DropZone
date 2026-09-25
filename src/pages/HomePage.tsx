@@ -6,10 +6,12 @@ import { FileCard } from '../components/FileCard';
 import { CollectionCard } from '../components/CollectionCard';
 import { Button } from '../components/Button';
 import { Trash2, Sparkles, AlertCircle, X } from 'lucide-react';
+import { getStorageMode } from '../lib/storage';
 
 export function HomePage() {
   const navigate = useNavigate();
   const { shareId, successfulUploads, activeUploads, uploadFiles, clearAll, globalError, clearGlobalError } = useUpload();
+  const storageMode = getStorageMode();
 
   const handleFilesSelected = useCallback((files: File[]) => {
     console.log('[HomePage] FILES RECEIVED:', files.length, 'files');
@@ -36,6 +38,15 @@ export function HomePage() {
       </div>
 
       <div className="relative max-w-2xl mx-auto px-4 sm:px-6 py-12 md:py-20">
+        {/* Storage mode indicator */}
+        {storageMode === 'local' && (
+          <div className="mb-6 p-3 rounded-lg bg-amber-400/10 border border-amber-400/20">
+            <p className="text-xs text-amber-400">
+              <strong>Local storage mode:</strong> Files are stored in your browser. Share links work on this device only.
+            </p>
+          </div>
+        )}
+
         {/* Hero */}
         <div className="text-center mb-10 md:mb-14">
           <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-2 border border-border text-xs text-text-muted mb-5">
@@ -115,7 +126,7 @@ export function HomePage() {
           <div className="flex items-center justify-center gap-4 text-xs text-text-muted">
             <span>No sign-up required</span>
             <span className="w-1 h-1 rounded-full bg-border" />
-            <span>Cloud storage</span>
+            <span>{storageMode === 'cloud' ? 'Cloud storage' : 'Local storage'}</span>
             <span className="w-1 h-1 rounded-full bg-border" />
             <span>Up to 100 MB per file</span>
           </div>
