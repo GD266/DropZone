@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import type { ZipProgress } from '../types';
-import { getShare, getFileBlob } from './storage';
+import { getShare, getFileBlob, getLocalFileBlob, getStorageMode } from './storage';
 
 export async function createZipDownload(
   shareId: string,
@@ -27,21 +27,35 @@ export async function createZipDownload(
       throw new Error('Failed to create ZIP folder');
     }
 
+    const storageMode = getStorageMode();
+
     // Download and add each file to the ZIP
     for (let i = 0; i < share.files.length; i++) {
       const file = share.files[i];
       
       onProgress?.({ 
         stage: 'creating', 
-        message: `Downloading files... ${i + 1}/${share.files.length}`,
+        message: `Processing files... ${i + 1}/${share.files.length}`,
         percent: Math.round(((i + 1) / share.files.length) * 50)
       });
 
       try {
-        const blob = await getFileBlob(file.storagePath);
+        let blob: Blob;
+        
+        if (storageMode === 'cloud' && file.storagePath) {
+          blob = await getFileBlob(file.storagePath);
+        } else {
+          // Local mode
+          const result = await getLocalFileBlob(file.id);
+          if (!result) {
+            throw new Error(`File ${file.name} not found in local storage`);
+          }
+          blob = result.blob;
+        }
+        
         folder.file(file.name, blob);
       } catch (err) {
-        console.error(`Failed to download file ${file.name}:`, err);
+        console.error(`Failed to process file ${file.name}:`, err);
         // Continue with other files
       }
       
