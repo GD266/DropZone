@@ -1,4 +1,4 @@
-import { supabase, STORAGE_BUCKET } from './supabase';
+import { getSupabaseClient, STORAGE_BUCKET } from './supabase';
 import { v4 as uuidv4 } from 'uuid';
 import type { DbShare, DbFile, ShareCollection, FileRecord } from '../types';
 
@@ -23,7 +23,7 @@ function getStoragePath(shareId: string, fileId: string, filename: string): stri
 export async function createShare(): Promise<string> {
   const shareId = uuidv4();
   
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('shares')
     .insert({ share_id: shareId })
     .select()
@@ -38,7 +38,7 @@ export async function createShare(): Promise<string> {
 }
 
 export async function getShare(shareId: string): Promise<ShareCollection | null> {
-  const { data: shareData, error: shareError } = await supabase
+  const { data: shareData, error: shareError } = await getSupabaseClient()
     .from('shares')
     .select('*')
     .eq('share_id', shareId)
@@ -49,7 +49,7 @@ export async function getShare(shareId: string): Promise<ShareCollection | null>
   }
   
   // Get files for this share
-  const { data: filesData, error: filesError } = await supabase
+  const { data: filesData, error: filesError } = await getSupabaseClient()
     .from('files')
     .select('*')
     .eq('share_id', shareId)
@@ -79,19 +79,21 @@ export async function getShare(shareId: string): Promise<ShareCollection | null>
 }
 
 export async function deleteShare(shareId: string): Promise<void> {
+  const client = getSupabaseClient();
+  
   // Delete files from storage first
-  const { data: filesData } = await supabase
+  const { data: filesData } = await client
     .from('files')
     .select('storage_path')
     .eq('share_id', shareId);
   
   if (filesData && filesData.length > 0) {
-    const paths = filesData.map(f => f.storage_path);
-    await supabase.storage.from(STORAGE_BUCKET).remove(paths);
+    const paths = filesData.map((f: { storage_path: string }) => f.storage_path);
+    await client.storage.from(STORAGE_BUCKET).remove(paths);
   }
   
   // Delete share (cascade will delete file records)
-  await supabase
+  await client
     .from('shares')
     .delete()
     .eq('share_id', shareId);
@@ -104,11 +106,12 @@ export async function uploadFile(
   shareId: string,
   onProgress?: (progress: number) => void
 ): Promise<FileRecord> {
+  const client = getSupabaseClient();
   const fileId = uuidv4();
   const storagePath = getStoragePath(shareId, fileId, file.name);
   
   // Upload to Supabase Storage
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await client.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, file, {
       cacheControl: '3600',
@@ -122,7 +125,7 @@ export async function uploadFile(
   }
   
   // Create file record in database
-  const { data: fileData, error: dbError } = await supabase
+  const { data: fileData, error: dbError } = await client
     .from('files')
     .insert({
       share_id: shareId,
@@ -137,7 +140,7 @@ export async function uploadFile(
   if (dbError) {
     console.error('Database insert failed:', dbError);
     // Cleanup: remove the uploaded file
-    await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
+    await client.storage.from(STORAGE_BUCKET).remove([storagePath]);
     throw new Error('Failed to save file metadata');
   }
   
@@ -153,7 +156,7 @@ export async function uploadFile(
 }
 
 export async function getFile(fileId: string): Promise<FileRecord | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('files')
     .select('*')
     .eq('id', fileId)
@@ -178,7 +181,7 @@ export async function getFileByShareAndId(
   shareId: string,
   fileId: string
 ): Promise<FileRecord | null> {
-  const { data, error } = await supabase
+  const { data, error } = await getSupabaseClient()
     .from('files')
     .select('*')
     .eq('id', fileId)
@@ -201,7 +204,9 @@ export async function getFileByShareAndId(
 }
 
 export async function deleteFile(fileId: string): Promise<void> {
-  const { data: fileData } = await supabase
+  const client = getSupabaseClient();
+  
+  const { data: fileData } = await client
     .from('files')
     .select('storage_path')
     .eq('id', fileId)
@@ -209,10 +214,10 @@ export async function deleteFile(fileId: string): Promise<void> {
   
   if (fileData) {
     // Delete from storage
-    await supabase.storage.from(STORAGE_BUCKET).remove([fileData.storage_path]);
+    await client.storage.from(STORAGE_BUCKET).remove([fileData.storage_path]);
     
     // Delete from database
-    await supabase
+    await client
       .from('files')
       .delete()
       .eq('id', fileId);
@@ -222,7 +227,7 @@ export async function deleteFile(fileId: string): Promise<void> {
 // ============ DOWNLOAD URL GENERATION ============
 
 export function getDownloadUrl(storagePath: string): string {
-  const { data } = supabase.storage
+  const { data } = getSupabaseClient().storage
     .from(STORAGE_BUCKET)
     .getPublicUrl(storagePath);
   
@@ -233,7 +238,7 @@ export async function getSignedDownloadUrl(
   storagePath: string,
   expiresIn: number = 3600
 ): Promise<string> {
-  const { data, error } = await supabase.storage
+  const { data, error } = await getSupabaseClient().storage
     .from(STORAGE_BUCKET)
     .createSignedUrl(storagePath, expiresIn);
   
@@ -248,7 +253,7 @@ export async function getSignedDownloadUrl(
 // ============ ZIP DOWNLOAD HELPER ============
 
 export async function getFileBlob(storagePath: string): Promise<Blob> {
-  const { data, error } = await supabase.storage
+  const { data, error } = await getSupabaseClient().storage
     .from(STORAGE_BUCKET)
     .download(storagePath);
   

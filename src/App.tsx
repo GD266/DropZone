@@ -2,8 +2,15 @@ import { HashRouter, Routes, Route } from 'react-router-dom';
 import { Header } from './components/Header';
 import { HomePage } from './pages/HomePage';
 import { SharePage } from './pages/SharePage';
+import { ConfigurationError } from './components/ConfigurationError';
+import { isSupabaseConfigured } from './lib/supabase';
 
 export default function App() {
+  // Check if Supabase is configured before rendering the app
+  if (!isSupabaseConfigured()) {
+    return <ConfigurationError />;
+  }
+
   return (
     <HashRouter>
       <div className="min-h-screen bg-surface-0">
