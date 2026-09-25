@@ -5,7 +5,7 @@ import type { DbShare, DbFile, ShareCollection, FileRecord } from '../types';
 // ============ INDEXEDDB FALLBACK ============
 
 const DB_NAME = 'dropzone_local_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const FILES_STORE = 'files';
 const SHARES_STORE = 'shares';
 
@@ -32,12 +32,26 @@ function openLocalDB(): Promise<IDBDatabase> {
     request.onsuccess = () => resolve(request.result);
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
+      const oldVersion = event.oldVersion;
+      
       if (!db.objectStoreNames.contains(FILES_STORE)) {
         const store = db.createObjectStore(FILES_STORE, { keyPath: 'id' });
         store.createIndex('shareId', 'shareId', { unique: false });
       }
       if (!db.objectStoreNames.contains(SHARES_STORE)) {
-        db.createObjectStore(SHARES_STORE, { keyPath: 'id' });
+        const store = db.createObjectStore(SHARES_STORE, { keyPath: 'id' });
+        store.createIndex('shareId', 'shareId', { unique: true });
+      } else if (oldVersion < 2) {
+        // Upgrade from version 1: add shareId index to existing SHARES_STORE
+        const request = event.target as IDBOpenDBRequest;
+        const db = request.result;
+        const tx = request.transaction;
+        if (tx) {
+          const shareStore = tx.objectStore(SHARES_STORE);
+          if (!shareStore.indexNames.contains('shareId')) {
+            shareStore.createIndex('shareId', 'shareId', { unique: true });
+          }
+        }
       }
     };
   });
