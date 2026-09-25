@@ -5,13 +5,15 @@ import { DropZone } from '../components/DropZone';
 import { FileCard } from '../components/FileCard';
 import { CollectionCard } from '../components/CollectionCard';
 import { Button } from '../components/Button';
-import { Trash2, Sparkles } from 'lucide-react';
+import { Trash2, Sparkles, AlertCircle, X } from 'lucide-react';
 
 export function HomePage() {
   const navigate = useNavigate();
-  const { shareId, successfulUploads, activeUploads, uploadFiles, clearAll } = useUpload();
+  const { shareId, successfulUploads, activeUploads, uploadFiles, clearAll, globalError, clearGlobalError } = useUpload();
 
   const handleFilesSelected = useCallback((files: File[]) => {
+    console.log('[HomePage] FILES RECEIVED:', files.length, 'files');
+    console.log('[HomePage] Calling uploadFiles');
     uploadFiles(files);
   }, [uploadFiles]);
 
@@ -53,7 +55,27 @@ export function HomePage() {
 
         {/* Upload Zone */}
         {!hasCompleted && (
-          <DropZone onFilesSelected={handleFilesSelected} />
+          <>
+            {globalError && (
+              <div className="mb-6 p-4 rounded-lg bg-error/10 border border-error/20">
+                <div className="flex items-start gap-3">
+                  <AlertCircle size={20} className="text-error shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-error mb-1">Upload failed</p>
+                    <p className="text-sm text-text-secondary">{globalError}</p>
+                  </div>
+                  <button
+                    onClick={clearGlobalError}
+                    className="text-text-muted hover:text-text-primary transition-colors"
+                    aria-label="Dismiss error"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
+            <DropZone onFilesSelected={handleFilesSelected} />
+          </>
         )}
 
         {/* Active uploads */}
