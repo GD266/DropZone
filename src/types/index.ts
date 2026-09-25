@@ -1,5 +1,6 @@
 export interface StoredFile {
   id: string;
+  shareId: string;
   name: string;
   size: number;
   type: string;
@@ -7,8 +8,15 @@ export interface StoredFile {
   uploadedAt: string;
 }
 
+export interface ShareCollection {
+  id: string;
+  createdAt: string;
+  fileIds: string[];
+}
+
 export interface FileMetadata {
   id: string;
+  shareId: string;
   name: string;
   size: number;
   type: string;
@@ -32,6 +40,10 @@ export interface UploadFile {
   file: File;
   status: UploadStatus;
   progress: number;
-  shareId?: string;
   error?: string;
+}
+
+export interface UploadSession {
+  shareId: string;
+  uploads: UploadFile[];
 }

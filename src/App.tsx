@@ -10,7 +10,8 @@ export default function App() {
         <Header />
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/share/:id" element={<SharePage />} />
+          <Route path="/share/:shareId" element={<SharePage />} />
+          <Route path="/share/:shareId/file/:fileId" element={<SharePage />} />
         </Routes>
       </div>
     </HashRouter>
