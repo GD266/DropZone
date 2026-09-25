@@ -1,26 +1,30 @@
 import { useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useUpload } from '../hooks/useUpload';
 import { DropZone } from '../components/DropZone';
 import { FileCard } from '../components/FileCard';
-import { ShareCard } from '../components/ShareCard';
+import { CollectionCard } from '../components/CollectionCard';
 import { Button } from '../components/Button';
 import { Trash2, Sparkles } from 'lucide-react';
 
 export function HomePage() {
-  const { uploads, uploadFiles, clearAll } = useUpload();
+  const navigate = useNavigate();
+  const { shareId, successfulUploads, activeUploads, uploadFiles, clearAll } = useUpload();
 
   const handleFilesSelected = useCallback((files: File[]) => {
     uploadFiles(files);
   }, [uploadFiles]);
 
-  const handleUploadAnother = useCallback(() => {
-    clearAll();
-  }, [clearAll]);
+  const handleViewSharePage = useCallback(() => {
+    if (shareId) {
+      navigate(`/share/${shareId}`);
+    }
+  }, [shareId, navigate]);
 
-  const completedUploads = uploads.filter(u => u.status === 'success');
-  const activeUploads = uploads.filter(u => u.status !== 'success');
-  const hasCompleted = completedUploads.length > 0;
+  const hasCompleted = successfulUploads.length > 0;
   const hasActive = activeUploads.length > 0;
+
+  const totalSize = successfulUploads.reduce((sum, u) => sum + u.file.size, 0);
 
   return (
     <div className="min-h-screen pt-14">
@@ -43,7 +47,7 @@ export function HomePage() {
             </span>
           </h1>
           <p className="text-text-secondary text-base sm:text-lg max-w-md mx-auto leading-relaxed">
-            Upload a file and get a shareable link in seconds.
+            Upload files and get a shareable link in seconds.
           </p>
         </div>
 
@@ -72,16 +76,15 @@ export function HomePage() {
           </div>
         )}
 
-        {/* Completed share cards */}
-        {hasCompleted && (
-          <div className="mt-8 space-y-4">
-            {completedUploads.map(upload => (
-              <ShareCard
-                key={upload.id}
-                upload={upload}
-                onUploadAnother={handleUploadAnother}
-              />
-            ))}
+        {/* Collection success card */}
+        {hasCompleted && shareId && (
+          <div className="mt-8">
+            <CollectionCard
+              shareId={shareId}
+              fileCount={successfulUploads.length}
+              totalSize={totalSize}
+              onViewSharePage={handleViewSharePage}
+            />
           </div>
         )}
 
@@ -92,7 +95,7 @@ export function HomePage() {
             <span className="w-1 h-1 rounded-full bg-border" />
             <span>Stored locally</span>
             <span className="w-1 h-1 rounded-full bg-border" />
-            <span>Up to 100 MB</span>
+            <span>Up to 100 MB per file</span>
           </div>
         </div>
       </div>
