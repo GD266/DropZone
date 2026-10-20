@@ -1,15 +1,19 @@
-import { Check, AlertCircle } from 'lucide-react';
+import { Check, AlertCircle, RotateCw, X } from 'lucide-react';
 import type { UploadFile } from '../types';
 import { FileIcon } from './FileIcon';
 import { ProgressBar } from './ProgressBar';
-import { formatFileSize } from '../lib/fileUtils';
+import { formatFileSize, validateFile } from '../lib/fileUtils';
 
 interface FileCardProps {
   upload: UploadFile;
+  onRetry?: (id: string) => void;
+  onRemove?: (id: string) => void;
 }
 
-export function FileCard({ upload }: FileCardProps) {
-  const { file, status, progress, error } = upload;
+export function FileCard({ upload, onRetry, onRemove }: FileCardProps) {
+  const { id, file, status, progress, error } = upload;
+  const canRemove = status !== 'uploading' && status !== 'success';
+  const canRetry = status === 'error' && !validateFile(file);
 
   return (
     <div className={`
@@ -19,14 +23,36 @@ export function FileCard({ upload }: FileCardProps) {
       ${status === 'uploading' ? 'border-accent/20 bg-accent/5' : ''}
       ${status === 'pending' ? 'border-border bg-surface-2' : ''}
     `}>
-      <FileIcon type={file.type} filename={file.name} size={18} />
+      <FileIcon type={file.type} filename={file.name} size={18} className="shrink-0" />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium text-text-primary truncate">
             {file.name}
           </p>
-          <StatusBadge status={status} />
+          <div className="flex items-center gap-1 shrink-0">
+            <StatusBadge status={status} />
+            {canRetry && onRetry && (
+              <button
+                onClick={() => onRetry(id)}
+                className="p-1 rounded text-text-muted hover:text-accent hover:bg-accent/10 transition-colors"
+                aria-label={`Retry ${file.name}`}
+                title="Retry upload"
+              >
+                <RotateCw size={13} />
+              </button>
+            )}
+            {canRemove && onRemove && (
+              <button
+                onClick={() => onRemove(id)}
+                className="p-1 rounded text-text-muted hover:text-error hover:bg-error/10 transition-colors"
+                aria-label={`Remove ${file.name}`}
+                title="Remove from list"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2 mt-0.5">

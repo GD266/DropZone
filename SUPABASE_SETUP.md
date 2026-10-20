@@ -1,5 +1,7 @@
 # Supabase Setup Guide (Optional)
 
+> **Historical document — do not run the SQL in this file.** The schema below includes a required `files.file_id` column that the current app never writes, so uploads fail. Use the current setup in [README.md](./README.md) with `supabase/migrations/001_initial_schema.sql` and `002_storage_setup.sql` instead.
+
 This guide explains how to configure Supabase for **cross-device file sharing** and **persistent cloud storage**.
 
 **Note**: DropZone works out of the box without Supabase using local browser storage. This setup is only needed if you want files to be accessible from different devices.

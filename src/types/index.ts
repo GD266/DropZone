@@ -16,6 +16,8 @@ export interface DbFile {
 }
 
 // Application types
+export type StorageMode = 'cloud' | 'local';
+
 export interface ShareCollection {
   id: string;
   shareId: string;
@@ -55,6 +57,7 @@ export interface UploadFile {
 
 export interface UploadSession {
   shareId: string;
+  createdAt: string;
   uploads: UploadFile[];
 }
 
@@ -62,4 +65,13 @@ export interface ZipProgress {
   stage: 'preparing' | 'creating' | 'downloading' | 'complete' | 'error';
   message: string;
   percent?: number;
+}
+
+export interface RecentShare {
+  shareId: string;
+  createdAt: string;
+  fileCount: number;
+  totalSize: number;
+  fileNames: string[];
+  mode: StorageMode;
 }

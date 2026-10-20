@@ -1,144 +1,342 @@
-import { useState, useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { UploadFile, UploadSession } from '../types';
-import { createShare, uploadFile } from '../lib/storage';
+import { createShare, deleteShare, isAbortError, uploadFile } from '../lib/storage';
 import { validateFile } from '../lib/fileUtils';
+import { createId } from '../lib/id';
+
+const MAX_CONCURRENT_UPLOADS = 3;
+
+function fileFingerprint(file: File): string {
+  return `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
+}
 
 export function useUpload() {
-  const [session, setSession] = useState<UploadSession | null>(null);
+  const [session, setSessionState] = useState<UploadSession | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const abortRef = useRef(false);
-  const sessionRef = useRef<UploadSession | null>(null);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const setSessionAndRef = useCallback((updater: React.SetStateAction<UploadSession | null>) => {
-    setSession(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      sessionRef.current = next;
-      return next;
-    });
+  const sessionRef = useRef<UploadSession | null>(null);
+  const abortRef = useRef<AbortController>(new AbortController());
+  const queueRef = useRef<UploadFile[]>([]);
+  const activeCountRef = useRef(0);
+  const sharePromiseRef = useRef<Promise<string> | null>(null);
+  const generationRef = useRef(0);
+  const processUploadRef = useRef<(upload: UploadFile) => Promise<void>>(async () => undefined);
+  const pumpRef = useRef<() => void>(() => undefined);
+
+  const setSession = useCallback((updater: React.SetStateAction<UploadSession | null>) => {
+    // Keep the ref in sync immediately. Upload workers read it in the same tick
+    // that a share is created, before React has committed the state update.
+    const previous = sessionRef.current;
+    const next = typeof updater === 'function' ? updater(previous) : updater;
+    sessionRef.current = next;
+    setSessionState(next);
   }, []);
 
   const updateUpload = useCallback((id: string, updates: Partial<UploadFile>) => {
-    setSessionAndRef(prev => {
+    setSession(prev => {
       if (!prev) return prev;
       return {
         ...prev,
-        uploads: prev.uploads.map(u => u.id === id ? { ...u, ...updates } : u),
+        uploads: prev.uploads.map(upload => (upload.id === id ? { ...upload, ...updates } : upload)),
       };
     });
-  }, [setSessionAndRef]);
+  }, [setSession]);
 
-  const uploadFiles = useCallback(async (files: File[]) => {
-    console.log('[useUpload] UPLOAD_HANDLER_STARTED with', files.length, 'files');
-    abortRef.current = false;
+  const ensureShare = useCallback((): Promise<string> => {
+    const currentShareId = sessionRef.current?.shareId;
+    if (currentShareId) return Promise.resolve(currentShareId);
+    if (sharePromiseRef.current) return sharePromiseRef.current;
 
-    // Filter out duplicates based on current session
-    const existingNames = new Set(sessionRef.current?.uploads.map(u => u.file.name) || []);
-    const uniqueFiles = files.filter(f => !existingNames.has(f.name));
-    console.log('[useUpload] Unique files after dedup:', uniqueFiles.length);
+    const generation = generationRef.current;
+    setIsPreparing(true);
 
-    if (uniqueFiles.length === 0) {
-      console.log('[useUpload] No unique files, returning early');
+    const promise = createShare()
+      .then(async shareId => {
+        if (generationRef.current !== generation) {
+          await deleteShare(shareId).catch(() => undefined);
+          throw new Error('Transfer cancelled');
+        }
+
+        setSession(prev => {
+          const createdAt = prev?.createdAt || new Date().toISOString();
+          return {
+            shareId,
+            createdAt,
+            uploads: prev?.uploads || [],
+          };
+        });
+        return shareId;
+      })
+      .finally(() => {
+        // A cancelled transfer can start a new share before this promise
+        // settles. Only the current promise may clear the shared state.
+        if (sharePromiseRef.current === promise) {
+          sharePromiseRef.current = null;
+          setIsPreparing(false);
+        }
+      });
+
+    sharePromiseRef.current = promise;
+    return promise;
+  }, [setSession]);
+
+  const processUpload = useCallback(async (upload: UploadFile) => {
+    const shareId = sessionRef.current?.shareId;
+    if (!shareId) {
+      updateUpload(upload.id, { status: 'error', error: 'No transfer was created for this file.' });
       return;
     }
 
-    // Create or get share ID
-    let shareId = sessionRef.current?.shareId;
-    console.log('[useUpload] Current shareId:', shareId);
-    
-    if (!shareId) {
-      console.log('[useUpload] No existing shareId, creating new share...');
-      try {
-        shareId = await createShare();
-        console.log('[useUpload] Share created successfully:', shareId);
-      } catch (err) {
-        console.error('[useUpload] FAILED TO CREATE SHARE:', err);
-        const errorMessage = err instanceof Error ? err.message : 'Failed to create share';
-        console.error('[useUpload] Error details:', errorMessage);
-        setGlobalError(errorMessage);
-        return;
-      }
+    if (abortRef.current.signal.aborted) return;
+
+    updateUpload(upload.id, { status: 'uploading', progress: 1, error: undefined });
+
+    try {
+      await uploadFile(
+        upload.file,
+        shareId,
+        progress => updateUpload(upload.id, { progress }),
+        abortRef.current.signal
+      );
+
+      updateUpload(upload.id, { status: 'success', progress: 100, error: undefined });
+    } catch (error) {
+      if (isAbortError(error) || abortRef.current.signal.aborted) return;
+
+      updateUpload(upload.id, {
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Upload failed. Please try again.',
+      });
+    }
+  }, [updateUpload]);
+
+  const pump = useCallback(() => {
+    while (activeCountRef.current < MAX_CONCURRENT_UPLOADS && queueRef.current.length > 0) {
+      const next = queueRef.current.shift();
+      if (!next) break;
+
+      activeCountRef.current += 1;
+      void processUploadRef.current(next).finally(() => {
+        activeCountRef.current -= 1;
+        pumpRef.current();
+      });
+    }
+  }, []);
+
+  processUploadRef.current = processUpload;
+  pumpRef.current = pump;
+
+  const uploadFiles = useCallback(async (files: File[]) => {
+    if (files.length === 0) return;
+
+    setGlobalError(null);
+
+    if (abortRef.current.signal.aborted) {
+      abortRef.current = new AbortController();
     }
 
-    const newUploads: UploadFile[] = uniqueFiles.map(file => ({
-      id: file.name + file.size, // Use name+size as unique ID
-      file,
-      status: 'pending' as const,
-      progress: 0,
-    }));
+    const activeFingerprints = new Set(
+      (sessionRef.current?.uploads || [])
+        .filter(upload => upload.status === 'pending' || upload.status === 'uploading')
+        .map(upload => fileFingerprint(upload.file))
+    );
 
-    setSessionAndRef(prev => ({
-      shareId,
+    const uniqueFiles = files.filter(file => {
+      const fingerprint = fileFingerprint(file);
+      if (activeFingerprints.has(fingerprint)) return false;
+      activeFingerprints.add(fingerprint);
+      return true;
+    });
+
+    if (uniqueFiles.length === 0) {
+      setGlobalError('Those files are already uploading. Wait for them to finish before selecting them again.');
+      return;
+    }
+
+    let newUploads: UploadFile[];
+    try {
+      newUploads = uniqueFiles.map(file => {
+        const validationError = validateFile(file);
+        return {
+          id: createId(),
+          file,
+          status: validationError ? 'error' : 'pending',
+          progress: 0,
+          error: validationError || undefined,
+        };
+      });
+    } catch (error) {
+      setGlobalError(
+        error instanceof Error
+          ? `Could not start the upload: ${error.message}`
+          : 'Could not start the upload. Please try selecting the file again.'
+      );
+      return;
+    }
+
+    const validUploads = newUploads.filter(upload => upload.status === 'pending');
+    const previousShareId = sessionRef.current?.shareId || '';
+
+    setSession(prev => ({
+      shareId: prev?.shareId || previousShareId,
+      createdAt: prev?.createdAt || new Date().toISOString(),
       uploads: [...(prev?.uploads || []), ...newUploads],
     }));
 
-    // Track successfully uploaded files for cleanup
-    const uploadedFileIds: string[] = [];
+    if (validUploads.length === 0) return;
 
-    console.log('[useUpload] Starting upload loop for', newUploads.length, 'files');
-    
-    for (const upload of newUploads) {
-      console.log('[useUpload] Processing file:', upload.file.name);
-      
-      if (abortRef.current) {
-        console.log('[useUpload] Upload aborted');
-        break;
-      }
+    const generation = generationRef.current;
+    queueRef.current.push(...validUploads);
 
-      const validationError = validateFile(upload.file);
-      if (validationError) {
-        console.error('[useUpload] File validation failed:', validationError);
-        updateUpload(upload.id, { status: 'error', error: validationError });
-        continue;
-      }
-      
-      console.log('[useUpload] File validation passed');
+    try {
+      await ensureShare();
+      if (generationRef.current !== generation) return;
+      pumpRef.current();
+    } catch (error) {
+      if (generationRef.current !== generation) return;
 
-      try {
-        console.log('[useUpload] Setting status to uploading');
-        updateUpload(upload.id, { status: 'uploading', progress: 0 });
-
-        console.log('[useUpload] Calling uploadFile for:', upload.file.name);
-        const fileRecord = await uploadFile(upload.file, shareId!, (progress: number) => {
-          updateUpload(upload.id, { progress });
-        });
-
-        console.log('[useUpload] File uploaded successfully:', fileRecord.id);
-        uploadedFileIds.push(fileRecord.id);
+      const validIds = new Set(validUploads.map(upload => upload.id));
+      queueRef.current = queueRef.current.filter(upload => !validIds.has(upload.id));
+      validUploads.forEach(upload => {
         updateUpload(upload.id, {
-          status: 'success',
-          progress: 100,
+          status: 'error',
+          progress: 0,
+          error: error instanceof Error ? error.message : 'Could not create the transfer.',
         });
-      } catch (err) {
-        console.error('[useUpload] UPLOAD FAILED:', err);
-        console.error('[useUpload] Error details:', err instanceof Error ? err.message : String(err));
-        const message = err instanceof Error ? err.message : 'Upload failed';
-        updateUpload(upload.id, { status: 'error', error: message });
-      }
+      });
+      setGlobalError(error instanceof Error ? error.message : 'Could not create the transfer.');
     }
-    
-    console.log('[useUpload] Upload loop complete');
+  }, [ensureShare, setSession, updateUpload]);
 
-    // If some files failed but share was created with no successful files,
-    // we could clean up the empty share. For now, we keep it.
-  }, [updateUpload, setSessionAndRef]);
+  const retryUpload = useCallback(async (id: string) => {
+    const upload = sessionRef.current?.uploads.find(item => item.id === id);
+    if (!upload || upload.status === 'uploading') return;
+
+    const validationError = validateFile(upload.file);
+    if (validationError) {
+      updateUpload(id, { status: 'error', error: validationError });
+      return;
+    }
+
+    setGlobalError(null);
+    const generation = generationRef.current;
+
+    try {
+      await ensureShare();
+      if (generationRef.current !== generation) return;
+
+      updateUpload(id, { status: 'pending', progress: 0, error: undefined });
+      queueRef.current.push({ ...upload, status: 'pending', progress: 0, error: undefined });
+      pumpRef.current();
+    } catch (error) {
+      if (generationRef.current !== generation) return;
+      setGlobalError(error instanceof Error ? error.message : 'Could not retry this file.');
+    }
+  }, [ensureShare, updateUpload]);
+
+  const retryAllFailed = useCallback(async () => {
+    const failed = (sessionRef.current?.uploads || []).filter(upload => upload.status === 'error' && !validateFile(upload.file));
+    if (failed.length === 0) return;
+
+    setGlobalError(null);
+    const generation = generationRef.current;
+
+    try {
+      await ensureShare();
+      if (generationRef.current !== generation) return;
+
+      failed.forEach(upload => updateUpload(upload.id, { status: 'pending', progress: 0, error: undefined }));
+      queueRef.current.push(...failed.map(upload => ({ ...upload, status: 'pending' as const, progress: 0, error: undefined })));
+      pumpRef.current();
+    } catch (error) {
+      if (generationRef.current !== generation) return;
+      setGlobalError(error instanceof Error ? error.message : 'Could not retry the failed files.');
+    }
+  }, [ensureShare, updateUpload]);
+
+  const removeUpload = useCallback((id: string) => {
+    const upload = sessionRef.current?.uploads.find(item => item.id === id);
+    if (!upload || upload.status === 'uploading' || upload.status === 'success') return;
+
+    queueRef.current = queueRef.current.filter(item => item.id !== id);
+    setSession(prev => {
+      if (!prev) return prev;
+      return { ...prev, uploads: prev.uploads.filter(item => item.id !== id) };
+    });
+  }, [setSession]);
 
   const clearAll = useCallback(() => {
-    abortRef.current = true;
-    setSessionAndRef(null);
-  }, [setSessionAndRef]);
+    generationRef.current += 1;
+    abortRef.current.abort();
+    abortRef.current = new AbortController();
+    queueRef.current = [];
+    activeCountRef.current = 0;
+    sharePromiseRef.current = null;
+    setSession(null);
+    setGlobalError(null);
+    setIsPreparing(false);
+  }, [setSession]);
 
-  const successfulUploads = session?.uploads.filter(u => u.status === 'success') || [];
-  const activeUploads = session?.uploads.filter(u => u.status !== 'success') || [];
+  const deleteCurrentShare = useCallback(async (): Promise<boolean> => {
+    const shareId = sessionRef.current?.shareId;
+    if (!shareId) {
+      clearAll();
+      return true;
+    }
+
+    setIsDeleting(true);
+    setGlobalError(null);
+    generationRef.current += 1;
+    abortRef.current.abort();
+    abortRef.current = new AbortController();
+    queueRef.current = [];
+    activeCountRef.current = 0;
+
+    try {
+      await deleteShare(shareId);
+      setSession(null);
+      return true;
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : 'Could not delete this transfer.');
+      return false;
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [clearAll, setSession]);
+
+  const uploads = session?.uploads || [];
+  const successfulUploads = uploads.filter(upload => upload.status === 'success');
+  const failedUploads = uploads.filter(upload => upload.status === 'error');
+  const activeUploads = uploads.filter(upload => upload.status === 'pending' || upload.status === 'uploading');
+  const totalSize = uploads.reduce((sum, upload) => sum + upload.file.size, 0);
+  const uploadedSize = successfulUploads.reduce((sum, upload) => sum + upload.file.size, 0);
+  const overallProgress = uploads.length === 0
+    ? 0
+    : Math.round(uploads.reduce((sum, upload) => sum + (upload.status === 'success' ? 100 : upload.progress), 0) / uploads.length);
 
   return {
     session,
-    uploads: session?.uploads || [],
+    uploads,
     shareId: session?.shareId || null,
+    createdAt: session?.createdAt || null,
     successfulUploads,
+    failedUploads,
     activeUploads,
     uploadFiles,
+    retryUpload,
+    retryAllFailed,
+    removeUpload,
     clearAll,
+    deleteCurrentShare,
     globalError,
     clearGlobalError: () => setGlobalError(null),
+    isPreparing,
+    isDeleting,
+    isUploading: activeUploads.length > 0 || isPreparing,
+    totalSize,
+    uploadedSize,
+    overallProgress,
   };
 }

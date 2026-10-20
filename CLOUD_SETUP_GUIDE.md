@@ -1,5 +1,7 @@
 # DropZone Cloud Storage Setup Guide
 
+> **Historical document.** It describes the old local-only → cloud migration and its SQL is outdated. Use [README.md](./README.md) with `supabase/migrations/001_initial_schema.sql` and `002_storage_setup.sql` instead.
+
 ## Current Status
 
 ✅ **Code is ready for cloud storage**  

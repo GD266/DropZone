@@ -1,5 +1,7 @@
 # DropZone Deployment Configuration Guide
 
+> **Historical document.** The `ConfigurationError` component has been removed. Missing Supabase configuration now falls back to local mode, and partial configuration is shown as a warning in the upload UI. See [README.md](./README.md) for current deployment steps.
+
 ## Issue: Black Screen After Deployment
 
 ### Root Cause

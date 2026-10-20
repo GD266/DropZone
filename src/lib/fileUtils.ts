@@ -44,6 +44,29 @@ export function formatDate(dateString: string): string {
   });
 }
 
+export function formatRelativeTime(dateString: string): string {
+  const then = new Date(dateString).getTime();
+  if (Number.isNaN(then)) return 'Recently';
+
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return 'Just now';
+
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+
+  return new Date(then).toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: days > 365 ? 'numeric' : undefined,
+  });
+}
+
 export function getFileLabel(category: FileCategory): string {
   const labels: Record<FileCategory, string> = {
     image: 'Image',

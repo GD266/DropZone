@@ -1,12 +1,14 @@
 import { useState, useRef, useCallback } from 'react';
-import { Upload, UploadCloud } from 'lucide-react';
+import { Upload, UploadCloud, Plus } from 'lucide-react';
+import { formatFileSize, MAX_FILE_SIZE } from '../lib/fileUtils';
 
 interface DropZoneProps {
   onFilesSelected: (files: File[]) => void;
   disabled?: boolean;
+  compact?: boolean;
 }
 
-export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
+export function DropZone({ onFilesSelected, disabled = false, compact = false }: DropZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
@@ -14,16 +16,17 @@ export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (disabled) return;
     dragCounterRef.current++;
     if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
       setIsDragOver(true);
     }
-  }, []);
+  }, [disabled]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    dragCounterRef.current--;
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
     if (dragCounterRef.current === 0) {
       setIsDragOver(false);
     }
@@ -55,21 +58,67 @@ export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
   }, [disabled]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    console.log('[DropZone] FILE INPUT CHANGE FIRED');
+    // Copy the FileList before resetting the input. Clearing the input first
+    // lets the user select the same file again even if the handler throws.
     const files = Array.from(e.target.files || []);
-    console.log('[DropZone] Selected files:', files);
-    console.log('[DropZone] File count:', files.length);
-    
-    if (files.length > 0) {
-      console.log('[DropZone] First file:', files[0]);
-      console.log('[DropZone] Calling onFilesSelected with', files.length, 'files');
-      onFilesSelected(files);
-    }
-    // Reset input so same file can be selected again
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
+    if (files.length > 0) {
+      onFilesSelected(files);
+    }
   }, [onFilesSelected]);
+
+  const input = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      multiple
+      onChange={handleFileChange}
+      className="hidden"
+      aria-hidden="true"
+    />
+  );
+
+  if (compact) {
+    return (
+      <div
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+        onClick={handleClick}
+        role="button"
+        tabIndex={0}
+        aria-label="Add more files by clicking or dragging"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick();
+          }
+        }}
+        className={`
+          flex items-center justify-center gap-3 w-full px-4 py-5
+          border border-dashed rounded-lg cursor-pointer transition-all duration-200
+          focus:outline-none focus:ring-2 focus:ring-accent/40 focus:ring-offset-2 focus:ring-offset-surface-0
+          ${isDragOver
+            ? 'border-accent bg-accent/[0.05] text-accent'
+            : 'border-border hover:border-border-hover hover:bg-surface-2/40 text-text-secondary hover:text-text-primary'
+          }
+          ${disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}
+        `}
+      >
+        {input}
+        <div className={`flex items-center justify-center w-8 h-8 rounded-lg ${isDragOver ? 'bg-accent/10' : 'bg-surface-2'}`}>
+          {isDragOver ? <UploadCloud size={17} /> : <Plus size={17} />}
+        </div>
+        <div className="text-left">
+          <p className="text-sm font-medium">{isDragOver ? 'Drop files to add them' : 'Add more files'}</p>
+          <p className="text-xs text-text-muted">Drop anywhere or click to browse</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -101,16 +150,8 @@ export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
         ${disabled ? 'opacity-50 cursor-not-allowed pointer-events-none' : ''}
       `}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        onChange={handleFileChange}
-        className="hidden"
-        aria-hidden="true"
-      />
+      {input}
 
-      {/* Glow effect when dragging */}
       {isDragOver && (
         <div className="absolute inset-0 rounded-lg bg-accent/[0.03] animate-pulse-border pointer-events-none" />
       )}
@@ -137,10 +178,11 @@ export function DropZone({ onFilesSelected, disabled = false }: DropZoneProps) {
           browse from your computer
         </span>
       </p>
+      <p className="text-xs text-text-muted mt-2">You can also paste files with Ctrl+V</p>
 
       <div className="mt-5 flex items-center gap-3 text-xs text-text-muted">
         <span className="px-2 py-0.5 rounded bg-surface-2 border border-border">Multiple files</span>
-        <span className="px-2 py-0.5 rounded bg-surface-2 border border-border">Up to 100 MB</span>
+        <span className="px-2 py-0.5 rounded bg-surface-2 border border-border">Up to {formatFileSize(MAX_FILE_SIZE)} each</span>
       </div>
     </div>
   );

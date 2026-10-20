@@ -52,18 +52,21 @@ ALTER TABLE public.files ENABLE ROW LEVEL SECURITY;
 -- ============================================
 
 -- Allow anyone to read shares (public access)
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.shares;
 CREATE POLICY "Enable read access for all users"
   ON public.shares
   FOR SELECT
   USING (true);
 
 -- Allow anyone to insert shares (public upload)
+DROP POLICY IF EXISTS "Enable insert access for all users" ON public.shares;
 CREATE POLICY "Enable insert access for all users"
   ON public.shares
   FOR INSERT
   WITH CHECK (true);
 
 -- Allow anyone to delete shares (for cleanup)
+DROP POLICY IF EXISTS "Enable delete access for all users" ON public.shares;
 CREATE POLICY "Enable delete access for all users"
   ON public.shares
   FOR DELETE
@@ -74,18 +77,21 @@ CREATE POLICY "Enable delete access for all users"
 -- ============================================
 
 -- Allow anyone to read files (public access)
+DROP POLICY IF EXISTS "Enable read access for all users" ON public.files;
 CREATE POLICY "Enable read access for all users"
   ON public.files
   FOR SELECT
   USING (true);
 
 -- Allow anyone to insert files (public upload)
+DROP POLICY IF EXISTS "Enable insert access for all users" ON public.files;
 CREATE POLICY "Enable insert access for all users"
   ON public.files
   FOR INSERT
   WITH CHECK (true);
 
 -- Allow anyone to delete files (for cleanup)
+DROP POLICY IF EXISTS "Enable delete access for all users" ON public.files;
 CREATE POLICY "Enable delete access for all users"
   ON public.files
   FOR DELETE
