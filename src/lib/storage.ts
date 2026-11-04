@@ -103,15 +103,20 @@ async function localGetShare(shareId: string): Promise<ShareCollection | null> {
     request.onsuccess = () => resolve(request.result || []);
   });
 
-  const files: FileRecord[] = filesData.map(f => ({
-    id: f.id,
-    shareId: f.shareId,
-    storagePath: '',
-    name: f.name,
-    size: f.size,
-    type: f.type,
-    uploadedAt: f.uploadedAt,
-  }));
+  // IndexedDB returns index records ordered by primary key (a random UUID),
+  // so sort by upload time to match the cloud mode's created_at ordering.
+  const files: FileRecord[] = filesData
+    .slice()
+    .sort((a, b) => (a.uploadedAt < b.uploadedAt ? -1 : a.uploadedAt > b.uploadedAt ? 1 : 0))
+    .map(f => ({
+      id: f.id,
+      shareId: f.shareId,
+      storagePath: '',
+      name: f.name,
+      size: f.size,
+      type: f.type,
+      uploadedAt: f.uploadedAt,
+    }));
 
   return {
     id: shareData.id,
@@ -325,7 +330,9 @@ function uploadToStorage(
     xhr.setRequestHeader('Authorization', `Bearer ${anonKey}`);
     xhr.setRequestHeader('apikey', anonKey);
     xhr.setRequestHeader('x-upsert', 'false');
-    xhr.setRequestHeader('cache-control', '3600');
+    // Must be a valid Cache-Control directive (matches supabase-js's default of
+    // max-age=3600); Storage echoes this value back on downloads.
+    xhr.setRequestHeader('cache-control', 'max-age=3600');
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
 
     xhr.upload.onprogress = (event) => {

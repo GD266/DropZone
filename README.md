@@ -60,7 +60,7 @@ When both Supabase values are present, files upload to Supabase Storage and link
 
    **Do not run the SQL in `SUPABASE_SETUP.md` or `CLOUD_SETUP_GUIDE.md`.** Those older guides add a required `files.file_id` column that the app never writes, and uploads will fail.
 
-3. In the Supabase dashboard, create a **public** storage bucket named `dropzone-files` with a **100 MB** per-file limit, then run [`supabase/migrations/002_storage_setup.sql`](./supabase/migrations/002_storage_setup.sql) for the storage policies.
+3. Run [`supabase/migrations/002_storage_setup.sql`](./supabase/migrations/002_storage_setup.sql) in the SQL Editor. It creates the **public** `dropzone-files` bucket (100 MB per-file limit) and the storage policies; it is idempotent, so re-running it is safe.
 
 4. Restart the dev server. For deployments, rebuild after changing env vars because Vite inlines `VITE_*` values at build time.
 

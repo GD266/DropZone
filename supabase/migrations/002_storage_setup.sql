@@ -1,20 +1,22 @@
 -- DropZone Storage Bucket Setup
--- This file documents the required Supabase Storage configuration
--- Storage buckets must be created via the Supabase Dashboard or API
+-- Creates the storage bucket (idempotent) and the public storage policies.
+-- Safe to run multiple times; run after 001_initial_schema.sql.
 
 -- ============================================
 -- STORAGE BUCKET CREATION
 -- ============================================
--- Create a bucket named 'dropzone-files' via the Supabase Dashboard:
--- 1. Go to Storage in your Supabase project
--- 2. Click "New bucket"
--- 3. Name: dropzone-files
--- 4. Public bucket: YES (the app uses direct public download URLs)
--- 5. File size limit: 104857600 (100 MB)
--- 6. Allowed MIME types: Leave empty (allow all)
+-- Creates a PUBLIC bucket named 'dropzone-files' with a 100 MB per-file limit
+-- (the app uses direct public download URLs). Re-running updates an existing
+-- bucket to the required settings instead of failing.
 --
--- If you use a custom VITE_SUPABASE_STORAGE_BUCKET, replace the bucket name in
--- these policies as well.
+-- If you use a custom VITE_SUPABASE_STORAGE_BUCKET, replace the bucket name
+-- here and in the policies below as well.
+
+INSERT INTO storage.buckets (id, name, public, file_size_limit)
+VALUES ('dropzone-files', 'dropzone-files', true, 104857600)
+ON CONFLICT (id) DO UPDATE
+  SET public = true,
+      file_size_limit = 104857600;
 
 -- ============================================
 -- STORAGE POLICIES

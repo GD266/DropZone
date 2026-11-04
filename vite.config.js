@@ -8,8 +8,7 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 3000,
     strictPort: true,
-    hmr: {
-      port: 3000,
-    },
+    // Allow proxied preview hosts (e.g. *.e2b.app) to reach the dev server.
+    allowedHosts: true,
   },
 });

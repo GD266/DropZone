@@ -30,7 +30,7 @@ DropZone is a client-only React 18 + TypeScript SPA for uploading files and shar
 
 - `supabase/migrations/001_initial_schema.sql` is the source of truth: `shares` and `files` tables plus public RLS policies.
 - **Do not run the SQL in `SUPABASE_SETUP.md` or `CLOUD_SETUP_GUIDE.md`.** It adds a required `files.file_id` column that the app never writes, so uploads will fail. Use `001_initial_schema.sql`.
-- `002_storage_setup.sql` only documents/creates storage policies. The public `dropzone-files` bucket (100 MB limit) must be created manually in the Supabase dashboard; there is no Supabase CLI config in the repo.
+- `002_storage_setup.sql` idempotently upserts the public `dropzone-files` bucket (100 MB limit) into `storage.buckets` and creates the storage policies; there is no Supabase CLI config in the repo.
 - Cloud objects live at `shares/{shareId}/{fileId}/{sanitized filename}`. DB rows are snake_case and mapped to camelCase in `storage.ts`; update `src/types/index.ts` with any schema change.
 - RLS is intentionally fully public (select/insert/delete) and there is no auth or ownership. Anyone with a share URL can read; anyone with the anon key can insert/delete.
 - The 100 MB per-file limit is enforced by `MAX_FILE_SIZE` in `src/lib/fileUtils.ts`; keep it aligned with the bucket limit.
